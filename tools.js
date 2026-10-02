@@ -1,6 +1,7 @@
 // Tools the AI can call. Each has a declaration (shown to Gemini) and a handler (runs here).
 const db = require('./db');
 const vault = require('./vault');
+const calendar = require('./calendar');
 
 const TZ = process.env.TZ || 'Asia/Colombo';
 const fmt = (ms) => new Date(ms).toLocaleString('en-GB', { timeZone: TZ, weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
@@ -73,6 +74,59 @@ const declarations = [
   },
 ];
 
+const calendarDeclarations = [
+  {
+    name: 'list_events',
+    description: 'List Google Calendar events between two times. Use for "what\'s on today/tomorrow/this week", "am I free at…", or finding an event before changing it. Defaults to today.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        from: S('Start of range, ISO 8601 with offset, e.g. 2026-10-02T00:00:00+05:30'),
+        to: S('End of range, ISO 8601 with offset'),
+        query: S('Optional text to match in event titles/descriptions'),
+      },
+    },
+  },
+  {
+    name: 'create_event',
+    description: 'Add an event to the owner\'s Google Calendar. Times in ISO 8601 with offset; for all-day events pass dates only (YYYY-MM-DD).',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        title: S('Event title'),
+        start: S('Start, e.g. 2026-10-03T13:00:00+05:30, or 2026-10-03 for all-day'),
+        end: S('End time (defaults to 1 hour after start), or the last day for multi-day all-day events'),
+        location: S('Optional location'),
+        description: S('Optional notes'),
+      },
+      required: ['title', 'start'],
+    },
+  },
+  {
+    name: 'update_event',
+    description: 'Change an existing calendar event (title, time, location, notes). Get the id from list_events first. Only pass fields that change; moving the start keeps the duration.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        id: S('Event id from list_events'),
+        calendar: S('Calendar id from list_events, if it returned one'),
+        title: S('New title'),
+        start: S('New start, ISO 8601 with offset (or YYYY-MM-DD for all-day)'),
+        end: S('New end'),
+        location: S('New location'),
+        description: S('New notes'),
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'delete_event',
+    description: 'Delete a calendar event by id. Only after the owner has clearly confirmed which event.',
+    parameters: { type: 'OBJECT', properties: { id: S('Event id from list_events'), calendar: S('Calendar id from list_events, if it returned one') }, required: ['id'] },
+  },
+];
+if (calendar.enabled()) declarations.push(...calendarDeclarations);
+
 const handlers = {
   set_reminder({ text, due_at, in_minutes, repeat = 'none' }, ctx) {
     let due;
@@ -98,6 +152,10 @@ const handlers = {
   search_notes: (a) => vault.searchNotes(a),
   read_note: (a) => vault.readNote(a),
   list_recent_notes: (a) => vault.listRecentNotes(a),
+  list_events: (a) => calendar.listEvents(a),
+  create_event: (a) => calendar.createEvent(a),
+  update_event: (a) => calendar.updateEvent(a),
+  delete_event: (a) => calendar.deleteEvent(a),
 };
 
 async function run(name, args, ctx) {
