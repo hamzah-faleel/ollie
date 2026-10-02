@@ -29,6 +29,7 @@ if (!cfg.groqKey) console.warn('GROQ_API_KEY not set: voice notes will be ignore
 const db = require('./db');
 const vault = require('./vault');
 const ai = require('./ai');
+const calendar = require('./calendar');
 const { fmt } = require('./tools');
 
 function systemPrompt() {
@@ -46,7 +47,8 @@ How to behave:
 Tools:
 - Reminders: when the owner asks to be reminded, call set_reminder. For relative times use in_minutes. For clock times, give due_at in ISO 8601 with the +05:30 offset. If the time is ambiguous (e.g. "at 4" when it's already past 4am), assume the next upcoming occurrence. Confirm with the exact time returned by the tool.
 - Notes / second brain: when the owner says note, save, remember, jot down, or shares an idea or info worth keeping, save it with save_note (or add_to_daily_log for quick journal-style updates). When asked about something they might have saved, call search_notes first, then read_note if needed. Never invent note contents.
-- Only claim an action is done if the tool returned ok/created/appended. If a tool returns an error, tell the owner plainly.`;
+${calendar.enabled() ? `- Calendar: for "what's on", "am I free", or scheduling questions call list_events. Add events with create_event (times with +05:30). To change or delete, find the event with list_events first; ask before deleting, and ask if the date/time is unclear rather than guessing. Reminders ping the owner on WhatsApp; calendar events go in Google Calendar. If the owner just says "remind me", use a reminder.
+` : ''}- Only claim an action is done if the tool returned ok/created/appended. If a tool returns an error, tell the owner plainly.`;
 }
 
 // ---------- OpenWA ----------
@@ -115,11 +117,31 @@ const HELP = `*What I can do*
 - _"Note: idea for the next shoot…"_
 - _"What did I note about…?"_
 - _"Log: finished the proposal draft"_
+- _"What's on today?"_ / _"Add lunch with Sam tomorrow at 1"_
 
 *Commands*
+/today - today's calendar and reminders
 /reminders - upcoming reminders
 /notes - recent notes
 /reset - clear chat memory (notes and reminders stay)`;
+
+// Today's agenda without spending any AI quota.
+const hm = (iso) => new Date(iso).toLocaleTimeString('en-GB', { timeZone: cfg.timezone, hour: '2-digit', minute: '2-digit' });
+async function todayText(chatId) {
+  const end = calendar.startOfDay(1).getTime();
+  const lines = [`*Today* - ${new Date().toLocaleDateString('en-GB', { timeZone: cfg.timezone, weekday: 'long', day: 'numeric', month: 'long' })}`];
+  if (calendar.enabled()) {
+    try {
+      const { events } = await calendar.listEvents();
+      lines.push(...(events.length ? events.map((e) => `- ${e.all_day ? 'All day' : `${hm(e.start)}-${hm(e.end)}`} ${e.title}${e.location ? ` (${e.location})` : ''}`) : ['- Nothing on the calendar']));
+    } catch (e) {
+      lines.push(`- Calendar error: ${e.message}`);
+    }
+  }
+  const rs = db.pendingReminders(chatId).filter((r) => r.due_at < end);
+  if (rs.length) lines.push('', '*Reminders*', ...rs.map((r) => `- ${hm(r.due_at)} ${r.text}`));
+  return lines.join('\n');
+}
 
 async function handleCommand(cmd, sessionId, chatId) {
   if (cmd === '/reset') {
@@ -136,6 +158,7 @@ async function handleCommand(cmd, sessionId, chatId) {
     const { notes } = await vault.listRecentNotes({ limit: 10 });
     return sendText(sessionId, chatId, notes.length ? '*Recent notes*\n' + notes.map((n) => `- ${n.path}`).join('\n') : 'No notes yet.');
   }
+  if (cmd === '/today') return sendText(sessionId, chatId, await todayText(chatId));
   if (cmd === '/help' || cmd === '/start') return sendText(sessionId, chatId, HELP);
   return false;
 }

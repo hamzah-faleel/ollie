@@ -9,8 +9,11 @@ WhatsApp → OpenWA (self-hosted gateway, separate container `openwa-api`) → w
 
 - `index.js` webhook server (HMAC-verified, `X-OpenWA-Signature`), message handling, WhatsApp commands, reminder scheduler (every 20s)
 - `ai.js` Gemini tool loop; retries 500/503, falls back to GEMINI_FALLBACK_MODEL; echoes model turns verbatim (thought signatures)
-- `tools.js` tool declarations (Gemini schema, uppercase types) + handlers: reminders, notes
+- `tools.js` tool declarations (Gemini schema, uppercase types) + handlers: reminders, notes, calendar
 - `db.js` SQLite via built-in `node:sqlite`: `messages` (chat history), `reminders`
+- `google.js` OAuth refresh-token -> access-token cache + `api()` helper (shared by future Gmail tools)
+- `calendar.js` Google Calendar list/create/update/delete; tools are only declared when GOOGLE_* env is set
+- `google-auth.js` one-time interactive script (Desktop OAuth client, loopback redirect pasted by hand) that prints GOOGLE_REFRESH_TOKEN
 - `vault.js` Obsidian-compatible Markdown vault; optional git sync to a private GitHub repo (VAULT_GIT_REMOTE)
 
 ## Constraints
@@ -28,8 +31,9 @@ WhatsApp → OpenWA (self-hosted gateway, separate container `openwa-api`) → w
 ## Commands
 - Rebuild + restart: `cd ~/OpenWA && docker compose up -d --build wa-bot`
 - Logs: `docker logs -f wa-bot`
-- Syntax check: `for f in *.js; do node --check $f; done`
+- Syntax check (no node on host): `docker run --rm -v "$PWD":/app -w /app node:22-alpine sh -c 'for f in *.js; do node --check $f; done'`
 - Secrets live in `.env` (never commit it).
 
 ## Roadmap
-- Stage 3 ideas: Google Calendar + Gmail tools, morning briefing, voice-note replies (TTS), smarter note search (embeddings), image/document understanding.
+- Done: Google Calendar tools + `/today` command.
+- Stage 3 ideas: Gmail tools (add the gmail scope in google-auth.js and re-auth), morning briefing, voice-note replies (TTS), smarter note search (embeddings), image/document understanding.

@@ -7,8 +7,10 @@ Text or voice note in -> Gemini (with tools) -> reply on WhatsApp. Only answers 
 - `tools.js`  tools the AI can use (reminders, notes)
 - `db.js`     SQLite: chat history + reminders (`/data/bot.db`)
 - `vault.js`  Obsidian-style Markdown vault (`/data/vault`), optional Git sync
+- `google.js` Google OAuth (refresh token -> access token); `calendar.js` Calendar tools
+- `google-auth.js` one-time script to get the refresh token
 
-WhatsApp commands: `/help`, `/reminders`, `/notes`, `/reset`
+WhatsApp commands: `/help`, `/today`, `/reminders`, `/notes`, `/reset`
 
 ## Setup on the server
 1. This folder lives at `~/OpenWA/wa-bot`; `docker-compose.override.yml` goes in `~/OpenWA/`.
@@ -22,6 +24,15 @@ WhatsApp commands: `/help`, `/reminders`, `/notes`, `/reset`
 2. Create a fine-grained token with Contents: read & write on that repo only.
 3. In `.env`: `VAULT_GIT_REMOTE=https://TOKEN@github.com/USER/second-brain.git`
 4. On your Mac: clone the repo, open the folder as a vault in Obsidian, install the "Git" community plugin and enable auto pull.
+
+## Google Calendar (optional)
+1. console.cloud.google.com: create a project, enable **Google Calendar API**.
+2. Google Auth Platform (OAuth consent screen): External, add yourself as a test user, then **Publish app** (In production).
+   Apps left in "Testing" get refresh tokens that expire after 7 days.
+3. Clients: create an OAuth client of type **Desktop app**. Put its ID and secret in `.env` as `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`.
+4. `docker exec -it wa-bot node google-auth.js`, open the link, approve (click through "Google hasn't verified this app"),
+   paste back the 127.0.0.1 URL the browser lands on. Put the printed `GOOGLE_REFRESH_TOKEN` in `.env`.
+5. `cd ~/OpenWA && docker compose up -d wa-bot`, then send `/today` on WhatsApp.
 
 ## Backup
 `docker run --rm -v openwa_wa-bot-data:/data -v $PWD:/out alpine tar czf /out/wa-bot-backup.tgz /data`
