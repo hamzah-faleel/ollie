@@ -1,4 +1,19 @@
-# wa-bot: WhatsApp AI secretary + second brain
+# Ollie: WhatsApp AI secretary + second brain
+
+Ollie is a single-user AI secretary I talk to on WhatsApp. I send a text or a voice note, and it replies, sets reminders, saves notes to a Markdown vault I can also open in Obsidian, and reads or edits my Google Calendar.
+
+**How it works:** WhatsApp -> OpenWA gateway -> HMAC-verified webhook -> Groq Whisper (voice) -> Gemini with function calling -> tools -> reply.
+
+**Design choices**
+- Zero npm dependencies: Node 22 built-ins only (`http`, `crypto`, `fetch`, `node:sqlite`).
+- Notes are plain `.md` files, with optional Git sync to a private repo.
+- Retries and a fallback model to cope with free-tier Gemini limits.
+- Only answers the owner's number.
+- Self-hosted with Docker on an Oracle Cloud ARM server.
+
+Built with AI assistance (Claude Code). Licensed under MIT.
+
+---
 
 Text or voice note in -> Gemini (with tools) -> reply on WhatsApp. Only answers OWNER_NUMBERS.
 
