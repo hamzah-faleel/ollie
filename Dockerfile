@@ -1,5 +1,6 @@
 FROM node:22-alpine
-RUN apk add --no-cache git
+# git: vault sync. ffmpeg: turns Gemini TTS audio into WhatsApp voice notes (OGG/Opus).
+RUN apk add --no-cache git ffmpeg
 WORKDIR /app
 COPY *.js ./
 # /data holds bot.db and the notes vault; owned by the unprivileged node user

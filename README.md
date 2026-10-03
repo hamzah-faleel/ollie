@@ -1,6 +1,6 @@
 # Ollie: WhatsApp AI secretary + second brain
 
-Ollie is a single-user AI secretary I talk to on WhatsApp. I send a text or a voice note, and it replies, sets reminders, saves notes to a Markdown vault I can also open in Obsidian, and reads or edits my Google Calendar.
+Ollie is a single-user AI secretary I talk to on WhatsApp. I send a text or a voice note, and it replies, sets reminders, saves notes to a Markdown vault I can also open in Obsidian, reads or edits my Google Calendar, searches Gmail and drafts replies (never sends), reads photos and PDFs, finds notes by meaning, and sends a morning briefing.
 
 **How it works:** WhatsApp -> OpenWA gateway -> HMAC-verified webhook -> Groq Whisper (voice) -> Gemini with function calling -> tools -> reply.
 
@@ -22,10 +22,12 @@ Text or voice note in -> Gemini (with tools) -> reply on WhatsApp. Only answers 
 - `tools.js`  tools the AI can use (reminders, notes)
 - `db.js`     SQLite: chat history + reminders (`/data/bot.db`)
 - `vault.js`  Obsidian-style Markdown vault (`/data/vault`), optional Git sync
-- `google.js` Google OAuth (refresh token -> access token); `calendar.js` Calendar tools
+- `google.js` Google OAuth (refresh token -> access token); `calendar.js` Calendar tools; `gmail.js` Gmail search/read/draft tools
 - `google-auth.js` one-time script to get the refresh token
 
-WhatsApp commands: `/help`, `/today`, `/reminders`, `/notes`, `/reset`
+WhatsApp commands: `/help`, `/today`, `/briefing`, `/voice`, `/reminders`, `/notes`, `/reset`
+
+A morning briefing (calendar, reminders, unread email) is sent daily at `BRIEFING_TIME` (default 07:00 local). It goes to the chat you last messaged the bot from.
 
 ## Setup on the server
 1. This folder lives at `~/OpenWA/wa-bot`; `docker-compose.override.yml` goes in `~/OpenWA/`.
@@ -48,6 +50,13 @@ WhatsApp commands: `/help`, `/today`, `/reminders`, `/notes`, `/reset`
 4. `docker exec -it wa-bot node google-auth.js`, open the link, approve (click through "Google hasn't verified this app"),
    paste back the 127.0.0.1 URL the browser lands on. Put the printed `GOOGLE_REFRESH_TOKEN` in `.env`.
 5. `cd ~/OpenWA && docker compose up -d wa-bot`, then send `/today` on WhatsApp.
+
+## Gmail (optional)
+Adds search, read and draft tools. The bot can save drafts but never sends email; you review and send from Gmail.
+1. In the same Google Cloud project, enable the **Gmail API** and add the scopes `gmail.readonly` and `gmail.compose` to the consent screen.
+2. Re-run `docker exec -it wa-bot node google-auth.js` (it now requests the Gmail scopes too) and replace `GOOGLE_REFRESH_TOKEN` in `.env`.
+3. Add `GMAIL_ENABLED=true` to `.env`, then `cd ~/OpenWA && docker compose up -d wa-bot`.
+Note: Google treats `gmail.readonly` as a restricted scope. For personal use you can click through the "unverified app" warning, but public verification needs a security assessment.
 
 ## Backup
 `docker run --rm -v openwa_wa-bot-data:/data -v $PWD:/out alpine tar czf /out/wa-bot-backup.tgz /data`

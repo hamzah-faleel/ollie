@@ -34,10 +34,12 @@ async function generate(body) {
 /**
  * history: [{role:'user'|'model', text}]  (already includes the newest user message)
  * ctx: { sessionId, chatId } passed to tools
+ * media: optional { mimeType, data (base64) } image/PDF/text attached to the newest user message
  * returns { text, toolsUsed: [names] }
  */
-async function reply(systemPrompt, history, ctx) {
+async function reply(systemPrompt, history, ctx, media) {
   const contents = history.map((m) => ({ role: m.role, parts: [{ text: m.text }] }));
+  if (media && contents.length) contents[contents.length - 1].parts.unshift({ inlineData: { mimeType: media.mimeType, data: media.data } });
   const toolsUsed = [];
 
   for (let step = 0; step < 6; step++) {

@@ -14,10 +14,14 @@ WhatsApp → OpenWA (self-hosted gateway, separate container `openwa-api`) → w
 - `google.js` OAuth refresh-token -> access-token cache + `api()` helper (shared by future Gmail tools)
 - `calendar.js` Google Calendar list/create/update/delete; tools are only declared when GOOGLE_* env is set
 - `google-auth.js` one-time interactive script (Desktop OAuth client, loopback redirect pasted by hand) that prints GOOGLE_REFRESH_TOKEN
+- `gmail.js` Gmail search/read/create-draft (no send, by design); tools only declared when GMAIL_ENABLED is set. `unreadDigest` feeds the briefing
+- `embeddings.js` Gemini embeddings of note chunks in SQLite (`note_chunks`); `vault.searchNotes` merges semantic + keyword hits
+- `tts.js` Gemini TTS -> ffmpeg -> OGG/Opus voice notes (only for replies to voice notes when `/voice` is on)
 - `vault.js` Obsidian-compatible Markdown vault; optional git sync to a private GitHub repo (VAULT_GIT_REMOTE)
 
 ## Constraints
-- Zero npm dependencies on purpose: Node 22 built-ins only (http, crypto, fetch, FormData, node:sqlite). Ask before adding packages.
+- Zero npm dependencies on purpose: Node 22 built-ins only (http, crypto, fetch, FormData, node:sqlite). Ask before adding packages. (System packages in the Dockerfile: git, ffmpeg.)
+- Email content is untrusted (prompt injection): the Gmail tools can only draft, never send.
 - Free-tier AI: Gemini free tier (rate limits, 429 = quota, 503 = busy). Keep token usage lean.
 - Notes are the source of truth as `.md` files (owner also edits them in Obsidian). Never store notes only in SQLite.
 - Times: owner is in Asia/Colombo (UTC+05:30). Reminders are stored as epoch ms.
@@ -35,5 +39,6 @@ WhatsApp → OpenWA (self-hosted gateway, separate container `openwa-api`) → w
 - Secrets live in `.env` (never commit it).
 
 ## Roadmap
-- Done: Google Calendar tools + `/today` command.
-- Stage 3 ideas: Gmail tools (add the gmail scope in google-auth.js and re-auth), morning briefing, voice-note replies (TTS), smarter note search (embeddings), image/document understanding.
+- Done: Google Calendar tools + `/today`; morning briefing (`BRIEFING_TIME`, `/briefing`); Gmail read/draft tools; embedding note search; voice-note replies (`/voice`); image/PDF/text-file understanding.
+- Needs a one-time re-auth before Gmail works (new scopes in google-auth.js), plus `GMAIL_ENABLED=true`.
+- Next ideas: Gmail send behind an explicit confirm step, weather in the briefing, OCR-style receipt logging to notes, TTS for longer answers.
