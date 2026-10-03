@@ -38,6 +38,7 @@ const weather = require('./weather');
 const contacts = require('./contacts');
 const profile = require('./profile');
 const tasks = require('./tasks');
+const graph = require('./graph');
 const { fmt } = require('./tools');
 
 async function systemPrompt() {
@@ -89,6 +90,13 @@ async function sendVoice(sessionId, chatId, ogg) {
   await openwa(`/sessions/${encodeURIComponent(sessionId)}/messages/send-audio`, {
     method: 'POST',
     body: JSON.stringify({ chatId, base64: ogg.toString('base64'), mimetype: 'audio/ogg; codecs=opus', ptt: true }),
+  });
+}
+
+async function sendFile(sessionId, chatId, buf, filename, mimetype, caption) {
+  await openwa(`/sessions/${encodeURIComponent(sessionId)}/messages/send-document`, {
+    method: 'POST',
+    body: JSON.stringify({ chatId, base64: buf.toString('base64'), mimetype, filename, caption }),
   });
 }
 
@@ -152,6 +160,7 @@ const HELP = `*What I can do*
 /today - today's calendar and reminders
 /tasks - your to-do list
 /weather - 3-day forecast
+/graph - an interactive map of your notes (HTML file)
 /briefing - send the morning briefing now
 /voice - toggle spoken replies to your voice notes
 /reminders - upcoming reminders
@@ -236,6 +245,12 @@ async function handleCommand(cmd, sessionId, chatId) {
     return sendText(sessionId, chatId, next === 'on'
       ? 'Voice replies on: when you send me a voice note, I will also answer with a voice note (short answers only).'
       : 'Voice replies off. I will answer in text only.');
+  }
+  if (cmd === '/graph') {
+    const { html, notes, links } = await graph.build();
+    const day = new Date().toLocaleDateString('en-CA', { timeZone: cfg.timezone });
+    return sendFile(sessionId, chatId, Buffer.from(html), `second-brain-${day}.html`, 'text/html',
+      `Your second brain: ${notes} notes, ${links} links. Open the file in a browser; drag, zoom, tap a dot, search.`);
   }
   if (cmd === '/tasks') {
     const t = await tasksText(30);
