@@ -19,6 +19,7 @@ const cfg = {
   timezone: process.env.TZ || 'Asia/Colombo',
   botName: process.env.BOT_NAME || 'Sec',
   voiceReplies: /^(1|true|on|yes)$/i.test(process.env.VOICE_REPLIES || ''), // default for /voice, per-owner toggle overrides
+  botSession: (process.env.BOT_SESSION_ID || '').trim(), // optional: only handle events from this OpenWA session id
   briefingTime: (process.env.BRIEFING_TIME ?? '07:00').trim(), // HH:MM local time; empty disables
 };
 
@@ -270,6 +271,7 @@ async function handle(event) {
   if (event.event !== 'message.received') return;
   const msg = event.data || {};
   const sessionId = event.sessionId;
+  if (cfg.botSession && sessionId !== cfg.botSession) return; // e.g. a read-only personal session: never act on it
   if (msg.fromMe || msg.isGroup || msg.kind !== 'individual') return;
 
   if (!isOwner(msg)) {

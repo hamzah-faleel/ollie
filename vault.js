@@ -101,11 +101,14 @@ function safePath(rel) {
   if (!full.startsWith(VAULT + path.sep)) throw new Error('Invalid note path');
   return full;
 }
-async function walk(dir = VAULT, out = []) {
+// Everything under a top-level "Private" folder is invisible to the AI: no search, no read_note, no embeddings
+// (those go to Google). Used for material derived from other people's chats. walkAll() is for local-only features.
+async function walk(dir = VAULT, out = [], includePrivate = false) {
   for (const e of await fs.readdir(dir, { withFileTypes: true }).catch(() => [])) {
     if (e.name.startsWith('.')) continue; // skip .git, .obsidian, .trash
+    if (!includePrivate && dir === VAULT && e.isDirectory() && e.name.toLowerCase() === 'private') continue;
     const p = path.join(dir, e.name);
-    if (e.isDirectory()) await walk(p, out);
+    if (e.isDirectory()) await walk(p, out, includePrivate);
     else if (e.name.endsWith('.md')) out.push(p);
   }
   return out;
@@ -204,6 +207,7 @@ async function listRecentNotes({ limit = 10 }) {
 }
 
 // Low-level helpers for modules that keep structured notes in the vault (contacts, profile, tasks).
-const files = { VAULT, walk, rel, titleOf, slug, safePath, today, pull, schedulePush };
+const walkAll = () => walk(VAULT, [], true);
+const files = { VAULT, walk, walkAll, rel, titleOf, slug, safePath, today, pull, schedulePush };
 
 module.exports = { files, init, syncEmbeddings, saveNote, appendToNote, addToDailyLog, readNote, searchNotes, listRecentNotes, gitEnabled };

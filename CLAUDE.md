@@ -21,6 +21,8 @@ WhatsApp → OpenWA (self-hosted gateway, separate container `openwa-api`) → w
 - `contacts.js` contacts as `People/<Name>.md` (frontmatter fields); vCard import (.vcf or a shared WhatsApp contact); birthdays feed the briefing
 - `profile.js` `Profile.md`: lasting facts about the owner, injected into every system prompt (3000 char cap)
 - `tasks.js` to-do list in `Tasks.md` (Obsidian Tasks syntax); open tasks feed the briefing and `/tasks`
+- `scripts/export-chats.js` (not in the image) read-only chat export to Markdown transcripts, run on the owner's own machine
+- `graph.js` self-contained HTML map of the vault, sent by `/graph`
 - `vault.js` Obsidian-compatible Markdown vault; optional git sync to a private GitHub repo (VAULT_GIT_REMOTE)
 
 ## Constraints
@@ -28,6 +30,7 @@ WhatsApp → OpenWA (self-hosted gateway, separate container `openwa-api`) → w
 - Email content is untrusted (prompt injection): the Gmail tools can only draft, never send.
 - Free-tier AI: Gemini free tier (rate limits, 429 = quota, 503 = busy). Keep token usage lean.
 - Notes are the source of truth as `.md` files (owner also edits them in Obsidian). Never store notes only in SQLite.
+- Privacy: anything under the vault's top-level `Private/` folder is hidden from the AI (search, read_note, embeddings, find_contact); only `/graph` and Obsidian see it. Chat-derived summaries go there. Never add a webhook to the owner's personal (read-only) OpenWA session; `BOT_SESSION_ID` pins the bot to its own session. See `scripts/CHAT_IMPORT.md`.
 - Times: owner is in Asia/Colombo (UTC+05:30). Reminders are stored as epoch ms.
 
 ## Runtime
@@ -39,7 +42,7 @@ WhatsApp → OpenWA (self-hosted gateway, separate container `openwa-api`) → w
 ## Commands
 - Rebuild + restart: `cd ~/OpenWA && docker compose up -d --build wa-bot`
 - Logs: `docker logs -f wa-bot`
-- Syntax check (no node on host): `docker run --rm -v "$PWD":/app -w /app node:22-alpine sh -c 'for f in *.js; do node --check $f; done'`
+- Syntax check (no node on host): `docker run --rm -v "$PWD":/app -w /app node:22-alpine sh -c 'for f in *.js scripts/*.js; do node --check $f; done'`
 - Secrets live in `.env` (never commit it).
 
 ## Roadmap

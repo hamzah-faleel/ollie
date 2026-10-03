@@ -23,8 +23,11 @@ function parseNote(text) {
   if (fm) for (const l of fm[1].split('\n')) { const i = l.indexOf(':'); if (i > 0) fields[l.slice(0, i).trim()] = l.slice(i + 1).trim(); }
   return { fields, body: fm ? text.slice(fm[0].length) : text };
 }
-const render = (name, fields, body) =>
-  `---\ntype: contact\n${FIELDS.filter((k) => fields[k]).map((k) => `${k}: ${fields[k]}`).join('\n')}\n---\n${body.replace(/^\n+/, '')}`.replace(/\n*$/, '\n');
+// Known fields first, then any others already in the file (so hand-added frontmatter is never dropped).
+const render = (name, fields, body) => {
+  const keys = [...FIELDS, ...Object.keys(fields).filter((k) => !FIELDS.includes(k) && k !== 'type')];
+  return `---\ntype: contact\n${keys.filter((k) => fields[k]).map((k) => `${k}: ${fields[k]}`).join('\n')}\n---\n${body.replace(/^\n+/, '')}`.replace(/\n*$/, '\n');
+};
 
 async function saveContact({ name, phone, email, relationship, company, birthday, notes }, { pull = true } = {}) {
   if (!name || !String(name).trim()) return { error: 'Need a name.' };

@@ -6,7 +6,7 @@ const { files } = require('./vault');
 const WIKILINK = /\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|[^\]]*)?\]\]/g;
 
 async function collect() {
-  const paths = await files.walk();
+  const paths = await files.walkAll(); // local-only, so private notes are included
   const notes = [];
   for (const f of paths) {
     const [text, st] = await Promise.all([fs.readFile(f, 'utf8'), fs.stat(f)]);
