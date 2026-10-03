@@ -4,6 +4,7 @@ const fs = require('fs/promises');
 const fss = require('fs');
 const path = require('path');
 const { execFile } = require('child_process');
+const embeddings = require('./embeddings');
 
 const VAULT = path.resolve(process.env.VAULT_DIR || '/data/vault');
 const REMOTE = process.env.VAULT_GIT_REMOTE || '';      // https://<token>@github.com/you/second-brain.git
@@ -59,8 +60,21 @@ function pull() {
   return queueGit(() => git(['pull', '--rebase', '--autostash', 'origin', BRANCH]).catch(() => {}));
 }
 
+// Re-index changed notes shortly after writes (and periodically, to catch edits pulled from Obsidian).
+let embedTimer = null;
+async function syncEmbeddings() {
+  if (!embeddings.enabled()) return;
+  const notes = await Promise.all((await walk()).map(async (f) => ({ path: rel(f), title: titleOf(f), text: await fs.readFile(f, 'utf8') })));
+  await embeddings.sync(notes);
+}
+function scheduleEmbed() {
+  clearTimeout(embedTimer);
+  embedTimer = setTimeout(() => syncEmbeddings().catch((e) => console.warn('[embeddings]', e.message)), 10_000);
+}
+
 let pushTimer = null;
 function schedulePush(message) {
+  scheduleEmbed();
   if (!gitEnabled()) return;
   clearTimeout(pushTimer);
   // Batch several quick edits into one commit.
@@ -151,8 +165,7 @@ async function readNote({ title }) {
   return { path: rel(file), content: text.length > 6000 ? text.slice(0, 6000) + '\n…(truncated)' : text };
 }
 
-async function searchNotes({ query, limit = 5 }) {
-  await pull();
+async function keywordSearch(query) {
   const words = String(query).toLowerCase().split(/\s+/).filter((w) => w.length > 1);
   const results = [];
   for (const f of await walk()) {
@@ -164,8 +177,22 @@ async function searchNotes({ query, limit = 5 }) {
     const i = Math.max(0, text.toLowerCase().indexOf(words[0] || ''));
     results.push({ title: titleOf(f), path: rel(f), score, snippet: text.slice(Math.max(0, i - 120), i + 280).replace(/\s+/g, ' ') });
   }
-  results.sort((a, b) => b.score - a.score);
-  return { results: results.slice(0, limit), total_matches: results.length };
+  return results.sort((a, b) => b.score - a.score);
+}
+
+// Meaning-based matches (embeddings) first, then keyword matches they missed. Falls back to keywords alone.
+async function searchNotes({ query, limit = 5 }) {
+  await pull();
+  const keyword = await keywordSearch(query);
+  let semantic = [];
+  try {
+    semantic = (await embeddings.search(query, limit)).map((r) => ({ title: path.basename(r.path, '.md'), path: r.path, similarity: r.score, snippet: r.snippet }));
+  } catch (e) {
+    console.warn('[embeddings] search failed, using keywords only:', e.message);
+  }
+  const seen = new Set(semantic.map((r) => r.path));
+  const merged = [...semantic, ...keyword.filter((r) => !seen.has(r.path)).map(({ score, ...r }) => r)];
+  return { results: merged.slice(0, limit), total_matches: merged.length, mode: semantic.length ? 'semantic+keyword' : 'keyword' };
 }
 
 async function listRecentNotes({ limit = 10 }) {
@@ -176,4 +203,4 @@ async function listRecentNotes({ limit = 10 }) {
   return { notes: withTime.slice(0, limit).map(({ f }) => ({ title: titleOf(f), path: rel(f) })) };
 }
 
-module.exports = { init, saveNote, appendToNote, addToDailyLog, readNote, searchNotes, listRecentNotes, gitEnabled };
+module.exports = { init, syncEmbeddings, saveNote, appendToNote, addToDailyLog, readNote, searchNotes, listRecentNotes, gitEnabled };

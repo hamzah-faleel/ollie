@@ -29,6 +29,11 @@ db.exec(`
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
   CREATE INDEX IF NOT EXISTS idx_reminders_due ON reminders(status, due_at);
+
+  CREATE TABLE IF NOT EXISTS kv (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
 `);
 
 const q = {
@@ -43,9 +48,15 @@ const q = {
   getRem: db.prepare('SELECT * FROM reminders WHERE id = ? AND chat_id = ?'),
   setStatus: db.prepare('UPDATE reminders SET status = ? WHERE id = ?'),
   setDue: db.prepare('UPDATE reminders SET due_at = ? WHERE id = ?'),
+
+  getKv: db.prepare('SELECT value FROM kv WHERE key = ?'),
+  setKv: db.prepare('INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'),
 };
 
 module.exports = {
+  exec: (sql) => db.exec(sql),
+  prepare: (sql) => db.prepare(sql),
+
   addMessage(chatId, role, text) {
     q.addMsg.run(chatId, role, text);
     q.pruneMsgs.run(chatId, chatId);
@@ -60,4 +71,7 @@ module.exports = {
   getReminder: (id, chatId) => q.getRem.get(id, chatId),
   setReminderStatus: (id, status) => q.setStatus.run(status, id),
   setReminderDue: (id, dueAt) => q.setDue.run(dueAt, id),
+
+  getKv: (key) => q.getKv.get(key)?.value ?? null,
+  setKv: (key, value) => q.setKv.run(key, String(value)),
 };
