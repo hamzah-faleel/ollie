@@ -5,7 +5,12 @@
 const crypto = require('crypto');
 const readline = require('readline/promises');
 
-const SCOPES = ['https://www.googleapis.com/auth/calendar.events'];
+// gmail.readonly + gmail.compose = read mail and create drafts; the bot can never send.
+const SCOPES = [
+  'https://www.googleapis.com/auth/calendar.events',
+  'https://www.googleapis.com/auth/gmail.readonly',
+  'https://www.googleapis.com/auth/gmail.compose',
+];
 const REDIRECT = 'http://127.0.0.1:8085';
 
 (async () => {
