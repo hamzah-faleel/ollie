@@ -8,6 +8,7 @@
 //
 // Options: --url http://127.0.0.1:2785  --out ./chat-export  --limit 2000 (messages per chat)  --min 3 (skip tiny chats)
 //          --since 2025-01-01  --only "name part"  --groups (include groups)  --pause 1500 (ms between chats)
+//          --chat 94771234567,94779876543  skip the (slow) chat list and read just these numbers or chat ids
 const fs = require('fs');
 const path = require('path');
 
@@ -24,6 +25,7 @@ const MIN = Number(opt('min', 3));
 const SINCE = opt('since') ? Date.parse(opt('since')) / 1000 : 0;
 const ONLY = (opt('only') || '').toLowerCase();
 const PAUSE = Number(opt('pause', 1500));
+const CHATS = (opt('chat') || '').split(',').map((x) => x.trim()).filter(Boolean);
 const TZ = process.env.TZ || 'Asia/Colombo';
 
 if (!KEY || !SESSION) {
@@ -34,7 +36,7 @@ if (!KEY || !SESSION) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function get(p, tries = 4) {
   for (let i = 0; ; i++) {
-    const res = await fetch(`${URL_}/api${p}`, { headers: { 'X-API-Key': KEY } }).catch((e) => ({ ok: false, status: 0, text: async () => e.message }));
+    const res = await fetch(`${URL_}/api${p}`, { headers: { 'X-API-Key': KEY }, signal: AbortSignal.timeout(10 * 60_000) }).catch((e) => ({ ok: false, status: 0, text: async () => e.message }));
     if (res.ok) return res.json();
     const retryable = [409, 503, 0].includes(res.status);
     if (!retryable || i >= tries) {
@@ -69,8 +71,17 @@ async function phoneOf(chat) {
 
 (async () => {
   fs.mkdirSync(OUT, { recursive: true, mode: 0o700 });
-  const chats = (await get(`/sessions/${SESSION}/chats?limit=1000`))
-    .filter((c) => (flag('groups') ? ['individual', 'group'].includes(c.kind) : c.kind === 'individual'))
+  let all;
+  if (CHATS.length) {
+    all = CHATS.map((c) => ({ id: c.includes('@') ? c : `${c.replace(/\D/g, '')}@c.us`, name: '', kind: 'individual' }));
+  } else {
+    console.log('Listing chats (can take several minutes on a large account; Ctrl+C and use --chat <number> to skip this)...');
+    const t0 = Date.now();
+    all = await get(`/sessions/${SESSION}/chats?limit=1000`);
+    console.log(`Chat list received: ${all.length} chats in ${Math.round((Date.now() - t0) / 1000)}s.`);
+  }
+  const chats = all
+    .filter((c) => CHATS.length || (flag('groups') ? ['individual', 'group'].includes(c.kind) : c.kind === 'individual'))
     .filter((c) => !ONLY || String(c.name || '').toLowerCase().includes(ONLY));
   console.log(`${chats.length} chats to read (${flag('groups') ? 'incl. groups' : '1:1 only'}), up to ${LIMIT} messages each.`);
 
@@ -79,6 +90,7 @@ async function phoneOf(chat) {
   let n = 0;
   for (const chat of chats) {
     n++;
+    console.log(`  [${n}/${chats.length}] reading ${chat.name || chat.id.split('@')[0]}...`);
     let msgs;
     try { msgs = await get(`/sessions/${SESSION}/messages/${encodeURIComponent(chat.id)}/history?deep=true&limit=${LIMIT}`); }
     catch (e) { console.warn(`  [${n}/${chats.length}] ${chat.name || chat.id}: ${e.message}`); continue; }
