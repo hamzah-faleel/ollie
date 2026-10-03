@@ -2,7 +2,20 @@
 const google = require('./google');
 
 const TZ = process.env.TZ || 'Asia/Colombo';
-const CALENDARS = (process.env.GOOGLE_CALENDAR_IDS || 'primary').split(',').map((s) => s.trim()).filter(Boolean);
+// GOOGLE_CALENDAR_IDS: comma-separated, each "id" or "Label=id". The first is the default for new events.
+const CALENDARS = (process.env.GOOGLE_CALENDAR_IDS || 'primary').split(',').map((s) => s.trim()).filter(Boolean).map((s) => {
+  const i = s.indexOf('=');
+  return i > 0 ? { label: s.slice(0, i).trim(), id: s.slice(i + 1).trim() } : { label: s, id: s };
+});
+const LABELS = CALENDARS.map((c) => c.label);
+// Accepts a label (case-insensitive) or a raw calendar id; defaults to the first calendar.
+function resolve(cal) {
+  if (!cal) return CALENDARS[0];
+  const k = String(cal).trim().toLowerCase();
+  const hit = CALENDARS.find((c) => c.label.toLowerCase() === k || c.id.toLowerCase() === k);
+  if (!hit) throw new Error(`Unknown calendar "${cal}". Available: ${LABELS.join(', ')}`);
+  return hit;
+}
 const BASE = 'https://www.googleapis.com/calendar/v3/calendars';
 const evUrl = (cal, id = '') => `${BASE}/${encodeURIComponent(cal)}/events${id ? '/' + encodeURIComponent(id) : ''}`;
 
@@ -27,7 +40,7 @@ function compact(e, cal) {
   const allDay = Boolean(e.start?.date);
   return {
     id: e.id,
-    ...(CALENDARS.length > 1 ? { calendar: cal } : {}),
+    ...(CALENDARS.length > 1 ? { calendar: cal.label } : {}),
     title: e.summary || '(no title)',
     start: e.start?.dateTime || e.start?.date,
     // all-day end dates from Google are exclusive; show the last day instead
@@ -46,13 +59,14 @@ async function listEvents({ from, to, query } = {}) {
     ...(query ? { q: query } : {}),
   });
   const lists = await Promise.all(CALENDARS.map(async (cal) =>
-    ((await google.api(`${evUrl(cal)}?${params}`)).items || []).filter((e) => e.status !== 'cancelled').map((e) => compact(e, cal))));
+    ((await google.api(`${evUrl(cal.id)}?${params}`)).items || []).filter((e) => e.status !== 'cancelled').map((e) => compact(e, cal))));
   const events = lists.flat().sort((a, b) => Date.parse(a.start) - Date.parse(b.start));
   return { from: min.toISOString(), to: max.toISOString(), events };
 }
 
-async function createEvent({ title, start, end, location, description }) {
+async function createEvent({ title, start, end, location, description, calendar }) {
   if (!title || !start) return { error: 'Need title and start.' };
+  const cal = resolve(calendar);
   const body = { summary: title, ...(location ? { location } : {}), ...(description ? { description } : {}) };
   if (isDate(start)) {
     body.start = { date: start };
@@ -61,12 +75,13 @@ async function createEvent({ title, start, end, location, description }) {
     body.start = when(start, 'start');
     body.end = end ? when(end, 'end') : { dateTime: new Date(parseTime(start, 'start') + 3_600_000).toISOString(), timeZone: TZ };
   }
-  const e = await google.api(evUrl(CALENDARS[0]), { method: 'POST', body });
-  return { ok: true, created: compact(e, CALENDARS[0]) };
+  const e = await google.api(evUrl(cal.id), { method: 'POST', body });
+  return { ok: true, created: compact(e, cal) };
 }
 
-async function updateEvent({ id, calendar = CALENDARS[0], title, start, end, location, description }) {
-  const old = await google.api(evUrl(calendar, id));
+async function updateEvent({ id, calendar, title, start, end, location, description }) {
+  const cal = resolve(calendar);
+  const old = await google.api(evUrl(cal.id, id));
   const body = {};
   if (title) body.summary = title;
   if (location != null) body.location = location;
@@ -84,14 +99,15 @@ async function updateEvent({ id, calendar = CALENDARS[0], title, start, end, loc
   } else if (end) {
     body.end = isDate(end) ? { date: addDays(end, 1) } : when(end, 'end');
   }
-  const e = await google.api(evUrl(calendar, id), { method: 'PATCH', body });
-  return { ok: true, updated: compact(e, calendar) };
+  const e = await google.api(evUrl(cal.id, id), { method: 'PATCH', body });
+  return { ok: true, updated: compact(e, cal) };
 }
 
-async function deleteEvent({ id, calendar = CALENDARS[0] }) {
-  const e = await google.api(evUrl(calendar, id));
-  await google.api(evUrl(calendar, id), { method: 'DELETE' });
+async function deleteEvent({ id, calendar }) {
+  const cal = resolve(calendar);
+  const e = await google.api(evUrl(cal.id, id));
+  await google.api(evUrl(cal.id, id), { method: 'DELETE' });
   return { ok: true, deleted: e.summary || '(no title)' };
 }
 
-module.exports = { enabled: google.enabled, listEvents, createEvent, updateEvent, deleteEvent, startOfDay };
+module.exports = { enabled: google.enabled, labels: LABELS, listEvents, createEvent, updateEvent, deleteEvent, startOfDay };

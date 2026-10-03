@@ -75,6 +75,7 @@ const declarations = [
   },
 ];
 
+const calendarList = calendar.labels.join(', ');
 const calendarDeclarations = [
   {
     name: 'list_events',
@@ -99,6 +100,7 @@ const calendarDeclarations = [
         end: S('End time (defaults to 1 hour after start), or the last day for multi-day all-day events'),
         location: S('Optional location'),
         description: S('Optional notes'),
+        calendar: S(`Which calendar to add it to, by name: ${calendarList}. Defaults to ${calendar.labels[0]}. Pick the matching one, e.g. uni lectures/coursework go on IIT.`),
       },
       required: ['title', 'start'],
     },
@@ -110,7 +112,7 @@ const calendarDeclarations = [
       type: 'OBJECT',
       properties: {
         id: S('Event id from list_events'),
-        calendar: S('Calendar id from list_events, if it returned one'),
+        calendar: S('Calendar name from list_events, if it returned one'),
         title: S('New title'),
         start: S('New start, ISO 8601 with offset (or YYYY-MM-DD for all-day)'),
         end: S('New end'),
@@ -123,7 +125,7 @@ const calendarDeclarations = [
   {
     name: 'delete_event',
     description: 'Delete a calendar event by id. Only after the owner has clearly confirmed which event.',
-    parameters: { type: 'OBJECT', properties: { id: S('Event id from list_events'), calendar: S('Calendar id from list_events, if it returned one') }, required: ['id'] },
+    parameters: { type: 'OBJECT', properties: { id: S('Event id from list_events'), calendar: S('Calendar name from list_events, if it returned one') }, required: ['id'] },
   },
 ];
 if (calendar.enabled()) declarations.push(...calendarDeclarations);
