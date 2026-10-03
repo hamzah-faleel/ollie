@@ -3,6 +3,10 @@ const db = require('./db');
 const vault = require('./vault');
 const calendar = require('./calendar');
 const gmail = require('./gmail');
+const weather = require('./weather');
+const contacts = require('./contacts');
+const profile = require('./profile');
+const tasks = require('./tasks');
 
 const TZ = process.env.TZ || 'Asia/Colombo';
 const fmt = (ms) => new Date(ms).toLocaleString('en-GB', { timeZone: TZ, weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
@@ -161,6 +165,69 @@ const gmailDeclarations = [
 ];
 if (gmail.enabled()) declarations.push(...gmailDeclarations);
 
+const lifeDeclarations = [
+  {
+    name: 'get_weather',
+    description: 'Current weather and the daily forecast (default 3 days) for the owner\'s location.',
+    parameters: { type: 'OBJECT', properties: { days: { type: 'NUMBER', description: 'Days of forecast, 1-7 (default 3)' } } },
+  },
+  {
+    name: 'save_contact',
+    description: 'Save or update a person in the owner\'s contacts (People/ in the vault). If the person exists, only the fields you pass change and notes are appended. Use whenever the owner shares someone\'s number, email, birthday or relationship.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        name: S('Full name'),
+        phone: S('Phone number with country code, e.g. +94771234567'),
+        email: S('Email address'),
+        relationship: S('Relationship or role, e.g. "friend", "cousin", "client", "lecturer"'),
+        company: S('Company, university or organisation'),
+        birthday: S('YYYY-MM-DD, or --MM-DD if the year is unknown'),
+        notes: S('Anything else worth remembering about them (appended with today\'s date)'),
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'find_contact',
+    description: 'Look up people in the owner\'s contacts by name, number, email, relationship, company or notes. Call this before asking the owner for someone\'s details, and when they mention a person you do not know. Omit query to list names.',
+    parameters: { type: 'OBJECT', properties: { query: S('Name, number or description, e.g. "Sam", "0771234567", "my dentist"') } },
+  },
+  {
+    name: 'remember_fact',
+    description: 'Remember a lasting fact about the owner (their profile is shown to you in every conversation). Use for routines, goals, projects, preferences, family and life updates, not one-off events (use add_to_daily_log for those). Keep each fact one short line.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        fact: S('One short line, e.g. "Studies AI & Data Science at IIT, stage 2"'),
+        section: S('Where it belongs', { enum: ['About me', 'Current focus', 'Preferences', 'People & relationships'] }),
+      },
+      required: ['fact'],
+    },
+  },
+  {
+    name: 'forget_fact',
+    description: 'Remove an outdated or wrong fact from the owner\'s profile. Pass words from the fact.',
+    parameters: { type: 'OBJECT', properties: { text: S('Words that identify the fact to remove') }, required: ['text'] },
+  },
+  {
+    name: 'add_task',
+    description: 'Add an item to the owner\'s to-do list (Tasks.md). Use for things to do without a specific time; use set_reminder when they want a ping at a time.',
+    parameters: { type: 'OBJECT', properties: { text: S('The task'), due: S('Optional due date, YYYY-MM-DD') }, required: ['text'] },
+  },
+  {
+    name: 'list_tasks',
+    description: 'List open to-do items, soonest due first, numbered.',
+    parameters: { type: 'OBJECT', properties: {} },
+  },
+  {
+    name: 'complete_task',
+    description: 'Tick off an open task, by its number from list_tasks or words from its text.',
+    parameters: { type: 'OBJECT', properties: { match: S('Task number or words from the task') }, required: ['match'] },
+  },
+];
+declarations.push(...lifeDeclarations);
+
 const handlers = {
   set_reminder({ text, due_at, in_minutes, repeat = 'none' }, ctx) {
     let due;
@@ -190,6 +257,14 @@ const handlers = {
   create_event: (a) => calendar.createEvent(a),
   update_event: (a) => calendar.updateEvent(a),
   delete_event: (a) => calendar.deleteEvent(a),
+  get_weather: (a) => weather.forecast(a),
+  save_contact: (a) => contacts.saveContact(a),
+  find_contact: (a) => contacts.findContact(a),
+  remember_fact: (a) => profile.rememberFact(a),
+  forget_fact: (a) => profile.forgetFact(a),
+  add_task: (a) => tasks.addTask(a),
+  list_tasks: () => tasks.listTasks(),
+  complete_task: (a) => tasks.completeTask(a),
   search_emails: (a) => gmail.searchEmails(a),
   read_email: (a) => gmail.readEmail(a),
   create_email_draft: (a) => gmail.createDraft(a),

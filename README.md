@@ -1,6 +1,6 @@
 # Ollie: WhatsApp AI secretary + second brain
 
-Ollie is a single-user AI secretary I talk to on WhatsApp. I send a text or a voice note, and it replies, sets reminders, saves notes to a Markdown vault I can also open in Obsidian, reads or edits my Google Calendar, searches Gmail and drafts replies (never sends), reads photos and PDFs, finds notes by meaning, and sends a morning briefing.
+Ollie is a single-user AI secretary I talk to on WhatsApp. I send a text or a voice note, and it replies, sets reminders, saves notes to a Markdown vault I can also open in Obsidian, reads or edits my Google Calendar, searches Gmail and drafts replies (never sends), reads photos and PDFs, finds notes by meaning, keeps my contacts, to-do list and a profile of my life, and sends a morning briefing with weather, today's agenda, tasks, birthdays and unread email.
 
 **How it works:** WhatsApp -> OpenWA gateway -> HMAC-verified webhook -> Groq Whisper (voice) -> Gemini with function calling -> tools -> reply.
 
@@ -22,10 +22,10 @@ Text or voice note in -> Gemini (with tools) -> reply on WhatsApp. Only answers 
 - `tools.js`  tools the AI can use (reminders, notes)
 - `db.js`     SQLite: chat history + reminders (`/data/bot.db`)
 - `vault.js`  Obsidian-style Markdown vault (`/data/vault`), optional Git sync
-- `google.js` Google OAuth (refresh token -> access token); `calendar.js` Calendar tools; `gmail.js` Gmail search/read/draft tools
+- `google.js` Google OAuth (refresh token -> access token); `calendar.js` Calendar tools; `gmail.js` Gmail search/read/draft tools; `weather.js`, `contacts.js`, `profile.js`, `tasks.js` weather, people, life profile and to-dos (all stored as Markdown in the vault)
 - `google-auth.js` one-time script to get the refresh token
 
-WhatsApp commands: `/help`, `/today`, `/briefing`, `/voice`, `/reminders`, `/notes`, `/reset`
+WhatsApp commands: `/help`, `/today`, `/tasks`, `/weather`, `/briefing`, `/voice`, `/reminders`, `/notes`, `/reset`
 
 A morning briefing (calendar, reminders, unread email) is sent daily at `BRIEFING_TIME` (default 07:00 local). It goes to the chat you last messaged the bot from.
 

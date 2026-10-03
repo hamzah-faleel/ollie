@@ -34,9 +34,14 @@ const ai = require('./ai');
 const calendar = require('./calendar');
 const gmail = require('./gmail');
 const tts = require('./tts');
+const weather = require('./weather');
+const contacts = require('./contacts');
+const profile = require('./profile');
+const tasks = require('./tasks');
 const { fmt } = require('./tools');
 
-function systemPrompt() {
+async function systemPrompt() {
+  const about = await profile.promptText().catch(() => '');
   const now = new Date();
   const local = now.toLocaleString('en-GB', { timeZone: cfg.timezone, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
   return `You are ${cfg.botName}, a personal AI secretary and second brain, chatting with your owner on WhatsApp.
@@ -49,7 +54,10 @@ How to behave:
 - Messages marked [voice note] are transcriptions and may contain small errors; infer the intent.
 - Messages marked [image] or [document] come with the file attached. Describe or answer from it, extract dates/amounts/tasks, and offer to save a note or set a reminder or calendar event when it makes sense. In later turns you only see the text marker, not the file itself.
 
-Tools:
+${about ? `What you know about the owner (their profile; trust it, and keep it current):\n${about}\n\n` : ''}Tools:
+- Remembering the owner: when they share something lasting about themselves or their life (routine, goal, project, preference, family, a big change), call remember_fact; if it replaces something outdated, forget_fact the old one. Don't ask permission for obvious things, but mention briefly that you noted it.
+- People: when the owner gives you someone's number, email, birthday or how they know them, call save_contact. When they mention a person you don't know, or ask for someone's details, call find_contact first.
+- To-dos: add_task for things to do without a specific time, list_tasks to review, complete_task when they say they did something. Use set_reminder instead when they want to be pinged at a time. get_weather for weather questions.
 - Reminders: when the owner asks to be reminded, call set_reminder. For relative times use in_minutes. For clock times, give due_at in ISO 8601 with the +05:30 offset. If the time is ambiguous (e.g. "at 4" when it's already past 4am), assume the next upcoming occurrence. Confirm with the exact time returned by the tool.
 - Notes / second brain: when the owner says note, save, remember, jot down, or shares an idea or info worth keeping, save it with save_note (or add_to_daily_log for quick journal-style updates). When asked about something they might have saved, call search_notes first, then read_note if needed. Never invent note contents.
 ${calendar.enabled() ? `- Calendar: for "what's on", "am I free", or scheduling questions call list_events. Add events with create_event (times with +05:30). To change or delete, find the event with list_events first; ask before deleting, and ask if the date/time is unclear rather than guessing. Reminders ping the owner on WhatsApp; calendar events go in Google Calendar. If the owner just says "remind me", use a reminder.
@@ -135,9 +143,15 @@ const HELP = `*What I can do*
 - _"Log: finished the proposal draft"_
 - _"Any new email?"_ / _"Draft a reply to Sam saying yes"_
 - _"What's on today?"_ / _"Add lunch with Sam tomorrow at 1"_
+- _"Add a task: submit the report by Friday"_ / _"What's on my to-do list?"_
+- _"Sam's number is 077…, his birthday is 14 May"_ or send me a .vcf / shared contact
+- _"Remember that I'm training for a 10k"_ (I keep a profile of your life)
+- _"What's the weather like?"_
 
 *Commands*
 /today - today's calendar and reminders
+/tasks - your to-do list
+/weather - 3-day forecast
 /briefing - send the morning briefing now
 /voice - toggle spoken replies to your voice notes
 /reminders - upcoming reminders
@@ -164,19 +178,41 @@ async function todayText(chatId) {
 
 const voiceRepliesOn = () => (db.getKv('voice_replies') ?? (cfg.voiceReplies ? 'on' : 'off')) === 'on';
 
-async function briefingText(chatId) {
-  let out = `Good morning ☀️\n\n${await todayText(chatId)}`;
-  if (gmail.enabled()) {
-    try {
-      const mail = await gmail.unreadDigest(5);
-      out += '\n\n*Unread email (last 24h)*\n' + (mail.length
-        ? mail.map((m) => `- ${m.from.replace(/<.*>/, '').replace(/"/g, '').trim() || m.from}: ${m.subject}`).join('\n')
-        : '- Nothing new');
-    } catch (e) {
-      out += `\n\n*Unread email*\n- Gmail error: ${e.message}`;
-    }
+// Each briefing section fails on its own, so one broken service never blanks the whole message.
+async function section(title, fn) {
+  try {
+    const lines = await fn();
+    return lines ? `\n\n*${title}*\n${lines}` : '';
+  } catch (e) {
+    return `\n\n*${title}*\n- Error: ${e.message}`;
   }
-  return out;
+}
+
+async function tasksText(limit = 5) {
+  const open = await tasks.openTasks();
+  if (!open.length) return null;
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: cfg.timezone });
+  const line = (t) => `- ${t.text}${t.due ? ` (${t.due < today ? 'overdue, ' : ''}due ${t.due === today ? 'today' : t.due})` : ''}`;
+  return open.slice(0, limit).map(line).join('\n') + (open.length > limit ? `\n- …and ${open.length - limit} more (/tasks)` : '');
+}
+
+async function birthdaysText() {
+  const soon = await contacts.upcomingBirthdays(7);
+  if (!soon.length) return null;
+  return soon.map((b) => `- ${b.name}${b.turning ? ` (turning ${b.turning})` : ''} - ${b.inDays === 0 ? 'today 🎂' : b.inDays === 1 ? 'tomorrow' : `in ${b.inDays} days`}`).join('\n');
+}
+
+async function briefingText(chatId) {
+  const [wx, mail, due, bdays] = await Promise.all([
+    section('Weather', async () => `- ${await weather.briefingLine()}`),
+    gmail.enabled() ? section('Unread email (last 24h)', async () => {
+      const m = await gmail.unreadDigest(5);
+      return m.length ? m.map((x) => `- ${x.from.replace(/<.*>/, '').replace(/"/g, '').trim() || x.from}: ${x.subject}`).join('\n') : '- Nothing new';
+    }) : '',
+    section('To do', () => tasksText()),
+    section('Birthdays', birthdaysText),
+  ]);
+  return `Good morning ☀️${wx}\n\n${await todayText(chatId)}${due}${bdays}${mail}`;
 }
 
 async function handleCommand(cmd, sessionId, chatId) {
@@ -201,6 +237,14 @@ async function handleCommand(cmd, sessionId, chatId) {
       ? 'Voice replies on: when you send me a voice note, I will also answer with a voice note (short answers only).'
       : 'Voice replies off. I will answer in text only.');
   }
+  if (cmd === '/tasks') {
+    const t = await tasksText(30);
+    return sendText(sessionId, chatId, t ? `*To do*\n${t}` : 'Nothing on your to-do list.');
+  }
+  if (cmd === '/weather') {
+    const f = await weather.forecast({ days: 3 });
+    return sendText(sessionId, chatId, `*${f.place}* - now ${f.now.temp_c}°C, ${f.now.conditions}\n` + f.days.map((d) => `- ${d.date.slice(5)}: ${d.conditions}, ${d.low_c}-${d.high_c}°C, ${d.rain_chance_pct}% rain`).join('\n'));
+  }
   if (cmd === '/briefing') return sendText(sessionId, chatId, await briefingText(chatId));
   if (cmd === '/today') return sendText(sessionId, chatId, await todayText(chatId));
   if (cmd === '/help' || cmd === '/start') return sendText(sessionId, chatId, HELP);
@@ -223,6 +267,16 @@ async function handle(event) {
   let text = (msg.body || '').trim();
   let viaVoice = false;
   let media = null;
+
+  const isVcf = (msg.type === 'contact' && /BEGIN:VCARD/i.test(msg.body || ''))
+    || (msg.type === 'document' && (/\.vcf$/i.test(msg.media?.filename || '') || /vcard/i.test(msg.media?.mimetype || '')));
+  if (isVcf) {
+    const raw = msg.type === 'contact' ? msg.body : (await getMedia(sessionId, msg)).buf.toString('utf8');
+    const { imported, names } = await contacts.importVcards(raw);
+    return sendText(sessionId, msg.chatId, imported
+      ? `Saved ${imported} contact${imported > 1 ? 's' : ''}${imported <= 5 ? `: ${names.join(', ')}` : ` (${names.join(', ')}…)`}. Tell me anything else about them (birthday, how you know them) and I'll add it.`
+      : "I couldn't find any contacts with a name in that file.");
+  }
 
   if (msg.type === 'voice' || msg.type === 'audio') {
     if (!cfg.groqKey) return sendText(sessionId, msg.chatId, 'Voice notes are not set up yet (missing GROQ_API_KEY).');
@@ -257,7 +311,7 @@ async function handle(event) {
   let ok = false;
   try {
     const history = db.recentMessages(msg.chatId, cfg.historyLimit);
-    ({ text: answer } = await ai.reply(systemPrompt(), history, { sessionId, chatId: msg.chatId }, media));
+    ({ text: answer } = await ai.reply(await systemPrompt(), history, { sessionId, chatId: msg.chatId }, media));
     db.addMessage(msg.chatId, 'model', answer);
     ok = true;
   } catch (e) {

@@ -17,6 +17,10 @@ WhatsApp → OpenWA (self-hosted gateway, separate container `openwa-api`) → w
 - `gmail.js` Gmail search/read/create-draft (no send, by design); tools only declared when GMAIL_ENABLED is set. `unreadDigest` feeds the briefing
 - `embeddings.js` Gemini embeddings of note chunks in SQLite (`note_chunks`); `vault.searchNotes` merges semantic + keyword hits
 - `tts.js` Gemini TTS -> ffmpeg -> OGG/Opus voice notes (only for replies to voice notes when `/voice` is on)
+- `weather.js` Open-Meteo forecast (no key); feeds the briefing, `/weather` and the `get_weather` tool
+- `contacts.js` contacts as `People/<Name>.md` (frontmatter fields); vCard import (.vcf or a shared WhatsApp contact); birthdays feed the briefing
+- `profile.js` `Profile.md`: lasting facts about the owner, injected into every system prompt (3000 char cap)
+- `tasks.js` to-do list in `Tasks.md` (Obsidian Tasks syntax); open tasks feed the briefing and `/tasks`
 - `vault.js` Obsidian-compatible Markdown vault; optional git sync to a private GitHub repo (VAULT_GIT_REMOTE)
 
 ## Constraints
@@ -39,6 +43,6 @@ WhatsApp → OpenWA (self-hosted gateway, separate container `openwa-api`) → w
 - Secrets live in `.env` (never commit it).
 
 ## Roadmap
-- Done: Google Calendar tools + `/today`; morning briefing (`BRIEFING_TIME`, `/briefing`); Gmail read/draft tools; embedding note search; voice-note replies (`/voice`); image/PDF/text-file understanding.
+- Done: weather/contacts/profile/tasks (briefing now has weather, to-dos, birthdays); multi-calendar read + create on a chosen calendar (`Label=id` in GOOGLE_CALENDAR_IDS); Google Calendar tools + `/today`; morning briefing (`BRIEFING_TIME`, `/briefing`); Gmail read/draft tools; embedding note search; voice-note replies (`/voice`); image/PDF/text-file understanding.
 - Needs a one-time re-auth before Gmail works (new scopes in google-auth.js), plus `GMAIL_ENABLED=true`.
-- Next ideas: Gmail send behind an explicit confirm step, weather in the briefing, OCR-style receipt logging to notes, TTS for longer answers.
+- Next ideas: Gmail send behind an explicit confirm step, evening wrap-up, birthday reminders the day before, OCR-style receipt logging to notes, TTS for longer answers.

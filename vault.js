@@ -203,4 +203,7 @@ async function listRecentNotes({ limit = 10 }) {
   return { notes: withTime.slice(0, limit).map(({ f }) => ({ title: titleOf(f), path: rel(f) })) };
 }
 
-module.exports = { init, syncEmbeddings, saveNote, appendToNote, addToDailyLog, readNote, searchNotes, listRecentNotes, gitEnabled };
+// Low-level helpers for modules that keep structured notes in the vault (contacts, profile, tasks).
+const files = { VAULT, walk, rel, titleOf, slug, safePath, today, pull, schedulePush };
+
+module.exports = { files, init, syncEmbeddings, saveNote, appendToNote, addToDailyLog, readNote, searchNotes, listRecentNotes, gitEnabled };
