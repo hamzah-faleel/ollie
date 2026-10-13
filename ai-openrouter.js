@@ -34,8 +34,7 @@ async function complete(state, tools) {
           model,
           messages: state.messages,
           tools: tools.openaiTools(),
-          max_tokens: 2048,
-          temperature: 0.6,
+          max_tokens: 2048, // no temperature: GPT-6 Luna endpoints don't support it, and require_parameters then finds no endpoint (404)
           provider: PRIVACY,
           usage: { include: true },
         }),

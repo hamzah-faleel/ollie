@@ -27,6 +27,7 @@ const orSrv = http.createServer(async (req, res) => {
   if (req.method === 'GET' && req.url.endsWith('/models')) { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(MODELS)); }
   const j = JSON.parse(await body(req));
   orRequests.push(j);
+  if (j.temperature !== undefined && j.provider?.require_parameters) { res.writeHead(404, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: { code: 404, message: 'No endpoints found that can handle the requested parameters' } })); } // real behaviour with Luna
   const next = script.shift() || { status: 500, json: { error: { message: 'script empty' } } };
   if (next.json.model === 'mock') next.json = { ...next.json, model: j.model }; // answer as the model that was asked for
   res.writeHead(next.status, { 'Content-Type': 'application/json' });
@@ -77,6 +78,7 @@ const check = (name, ok, info = '') => { console.log(`${ok ? 'PASS' : 'FAIL'}  $
   await say(botPort, 'hi');
   check('plain reply is sent', await until(() => sent.includes('Hello there')), JSON.stringify(sent));
   const r1 = orRequests[0] || {};
+  check('no unsupported parameters (temperature) sent', r1.temperature === undefined);
   check('privacy routing fields on every request', r1.provider?.zdr === true && r1.provider?.data_collection === 'deny' && r1.provider?.allow_fallbacks === false, JSON.stringify(r1.provider));
   check('tools sent in OpenAI format (lowercase types)', r1.tools?.length > 5 && r1.tools.every((t) => t.type === 'function' && t.function.parameters.type === 'object') && !JSON.stringify(r1.tools).includes('"STRING"'));
   check('system prompt has no clock (cacheable); clock is on the user message', !/Current local date and time/.test(r1.messages[0].content) && /Current local date and time/.test(r1.messages.at(-1).content));
