@@ -1,11 +1,11 @@
 // OpenRouter provider (OpenAI-compatible Chat Completions with tool calling).
 // Privacy: every request asks for zero-data-retention endpoints only, no data collection, no silent provider fallback.
-const { QuotaError, BusyError, CreditError, sleep, logUsage } = require('./ai-common');
+const { QuotaError, BusyError, CreditError, sleep, logUsage, bus } = require('./ai-common');
+const models = require('./models');
+const usage = require('./usage');
 
 const BASE = (process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1').replace(/\/$/, '');
 const KEY = process.env.OPENROUTER_API_KEY;
-const MODELS = [process.env.OPENROUTER_MODEL || 'openai/gpt-6-luna', process.env.OPENROUTER_FALLBACK_MODEL || 'google/gemini-3.1-flash-lite']
-  .filter((m, i, a) => m && a.indexOf(m) === i);
 const PRIVACY = { zdr: true, data_collection: 'deny', allow_fallbacks: false, require_parameters: true };
 const RETRY_MS = Number(process.env.AI_RETRY_BASE_MS || 2000); // 2s, 4s, 8s; tests shrink it
 const RETRY_STATUS = new Set([429, 500, 502, 503]);
@@ -24,8 +24,8 @@ function mediaPart(media) {
 async function complete(state, tools) {
   let lastStatus = 0;
   let lastErr = '';
-  for (let mi = state.modelIdx; mi < MODELS.length; mi++) {
-    const model = MODELS[mi];
+  for (let mi = state.modelIdx; mi < state.models.length; mi++) {
+    const model = state.models[mi];
     for (let attempt = 0; attempt < 4; attempt++) {
       const res = await fetch(`${BASE}/chat/completions`, {
         method: 'POST',
@@ -66,18 +66,26 @@ async function complete(state, tools) {
     console.warn(`${model} failed, switching model`);
   }
   console.error(lastErr);
-  if (lastStatus === 404) throw new Error(`No OpenRouter endpoint satisfies the privacy settings for ${MODELS.join(' or ')}`);
+  if (lastStatus === 404) throw new Error(`No OpenRouter endpoint satisfies the privacy settings for ${state.models.join(' or ')}`);
   throw lastStatus === 429 ? new QuotaError(lastErr) : new BusyError(lastErr);
 }
 
 module.exports = {
   name: 'openrouter',
-  start(systemPrompt, history, media) {
+  async start(systemPrompt, history, media) {
+    // Main model (runtime-switchable) then fallback. Over the daily spend limit: cheapest first.
+    const cur = models.current();
+    let list = [cur.main, cur.fallback].filter((m, i, a) => m && a.indexOf(m) === i);
+    if (usage.overLimit()) {
+      const cheap = await models.cheapest(list);
+      list = [cheap, ...list.filter((m) => m !== cheap)];
+      bus.emit('spend-limit', { spent: usage.spentToday(), limit: usage.limit(), model: cheap });
+    }
     // The clock changes every second; keep it out of the system prompt so the prompt prefix can be cached,
     // and put it on the newest user message instead.
     const clock = (CLOCK.exec(systemPrompt) || [''])[0];
     const stable = systemPrompt.replace(CLOCK, '').replace(/\n{3,}/g, '\n\n').trim();
-    const system = MODELS[0].startsWith('anthropic/')
+    const system = list[0].startsWith('anthropic/')
       ? { role: 'system', content: [{ type: 'text', text: stable, cache_control: { type: 'ephemeral' } }] } // Anthropic needs an explicit marker
       : { role: 'system', content: stable }; // OpenAI/Gemini cache a repeated prefix automatically
     const messages = [system, ...history.map((m) => ({ role: m.role === 'model' ? 'assistant' : 'user', content: m.text }))];
@@ -86,7 +94,7 @@ module.exports = {
       const text = clock ? `[${clock}]\n${last.content}` : last.content;
       last.content = media ? [mediaPart(media), { type: 'text', text }] : text;
     }
-    return { messages, modelIdx: 0 };
+    return { messages, models: list, modelIdx: 0 };
   },
   async step(state, tools) {
     const msg = await complete(state, tools);

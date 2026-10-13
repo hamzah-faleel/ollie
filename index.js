@@ -41,6 +41,8 @@ const contacts = require('./contacts');
 const profile = require('./profile');
 const tasks = require('./tasks');
 const graph = require('./graph');
+const usage = require('./usage');
+const models = require('./models');
 const { fmt } = require('./tools');
 
 async function systemPrompt() {
@@ -166,6 +168,8 @@ const HELP = `*What I can do*
 /weather - 3-day forecast
 /graph - an interactive map of your notes (HTML file)
 /briefing - send the morning briefing now
+/usage - AI messages, tokens and cost (today, week, month)
+/model - show or switch the AI model (/model <slug>, /model reset)
 /voice - toggle spoken replies to your voice notes
 /reminders - upcoming reminders
 /notes - recent notes
@@ -228,7 +232,7 @@ async function briefingText(chatId) {
   return `Good morning ☀️${wx}\n\n${await todayText(chatId)}${due}${bdays}${mail}`;
 }
 
-async function handleCommand(cmd, sessionId, chatId) {
+async function handleCommand(cmd, sessionId, chatId, args = '') {
   if (cmd === '/reset') {
     db.clearMessages(chatId);
     return sendText(sessionId, chatId, 'Chat memory cleared. Your notes and reminders are untouched.');
@@ -249,6 +253,19 @@ async function handleCommand(cmd, sessionId, chatId) {
     return sendText(sessionId, chatId, next === 'on'
       ? 'Voice replies on: when you send me a voice note, I will also answer with a voice note (short answers only).'
       : 'Voice replies off. I will answer in text only.');
+  }
+  if (cmd === '/usage') return sendText(sessionId, chatId, usage.report());
+  if (cmd === '/model') {
+    if (ai.providerName !== 'openrouter') return sendText(sessionId, chatId, `Model switching only works with AI_PROVIDER=openrouter (currently ${ai.providerName}).`);
+    const arg = args.trim();
+    if (arg === 'reset') { models.reset(); }
+    else if (arg) {
+      const v = await models.validate(arg);
+      if (!v.ok) return sendText(sessionId, chatId, `${v.reason}${v.suggestions.length ? '\nDid you mean:\n' + v.suggestions.map((m) => `- ${m}`).join('\n') : ''}`);
+      models.setMain(arg);
+    }
+    const m = models.current();
+    return sendText(sessionId, chatId, `${arg ? (arg === 'reset' ? 'Back to the default.\n' : 'Switched.\n') : ''}*Models*\nMain: ${m.main}${m.overridden ? ' (set with /model)' : ''}\nFallback: ${m.fallback}${usage.overLimit() ? '\n⚠️ Daily spend limit reached: using the cheapest model until tomorrow.' : ''}\n\n/model <slug> to switch, /model reset for the .env default.`);
   }
   if (cmd === '/graph') {
     const { html, notes, links } = await graph.build();
@@ -276,6 +293,15 @@ async function creditWarning(sessionId, chatId, provider) {
   db.setKv('last_credit_warning', Date.now());
   await sendText(sessionId, chatId, `AI credit ran out — top up ${provider}`).catch(() => {});
 }
+
+// The spend guard (usage.js) switches to the cheapest model; tell the owner once per day.
+ai.bus.on('spend-limit', async ({ spent, limit, model }) => {
+  const day = usage.today();
+  if (db.getKv('spend_warned_day') === day) return;
+  db.setKv('spend_warned_day', day);
+  const target = JSON.parse(db.getKv('owner_target') || 'null');
+  if (target) await sendText(target.sessionId, target.chatId, `⚠️ Daily AI spend limit reached ($${spent.toFixed(2)} of $${limit.toFixed(2)}). Using the cheapest model (${model}) for the rest of today.`).catch(() => {});
+});
 
 async function handle(event) {
   if (event.event !== 'message.received') return;
@@ -327,7 +353,8 @@ async function handle(event) {
   }
 
   if (!viaVoice && !media && text.startsWith('/')) {
-    const handled = await handleCommand(text.toLowerCase().split(/\s/)[0], sessionId, msg.chatId);
+    const [cmdWord, ...cmdArgs] = text.split(/\s+/);
+    const handled = await handleCommand(cmdWord.toLowerCase(), sessionId, msg.chatId, cmdArgs.join(' '));
     if (handled !== false) return;
   }
 

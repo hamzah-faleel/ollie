@@ -2,7 +2,8 @@
 // responses: start(systemPrompt, history, media) -> state, step(state, tools) -> { text, calls }, addResults(...).
 // AI_PROVIDER=gemini (default) | openrouter
 const tools = require('./tools');
-const { QuotaError, BusyError, CreditError } = require('./ai-common');
+const { QuotaError, BusyError, CreditError, turnStore, bus } = require('./ai-common');
+const crypto = require('crypto');
 
 const NAME = (process.env.AI_PROVIDER || 'gemini').trim().toLowerCase();
 if (!['gemini', 'openrouter'].includes(NAME)) { console.error(`AI_PROVIDER must be "gemini" or "openrouter", got "${NAME}"`); process.exit(1); }
@@ -16,7 +17,11 @@ console.log(`[ai] provider: ${provider.name}`);
  * returns { text, toolsUsed: [names] }
  */
 async function reply(systemPrompt, history, ctx, media) {
-  const state = provider.start(systemPrompt, history, media);
+  return turnStore.run(crypto.randomUUID(), () => run(systemPrompt, history, ctx, media));
+}
+
+async function run(systemPrompt, history, ctx, media) {
+  const state = await provider.start(systemPrompt, history, media);
   const toolsUsed = [];
 
   for (let step = 0; step < 6; step++) {
@@ -34,4 +39,4 @@ async function reply(systemPrompt, history, ctx, media) {
   return { text: 'I got stuck in a loop doing that. Could you rephrase?', toolsUsed };
 }
 
-module.exports = { reply, QuotaError, BusyError, CreditError };
+module.exports = { reply, QuotaError, BusyError, CreditError, bus, providerName: provider.name };
