@@ -7,8 +7,9 @@
 //   OPENWA_API_KEY=<viewer key> node export-chats.js --session <session id>
 //
 // Options: --url http://127.0.0.1:2785  --out ./chat-export  --limit 2000 (messages per chat)  --min 3 (skip tiny chats)
-//          --since 2025-01-01  --only "name part"  --groups (include groups)  --pause 1500 (ms between chats)
+//          --since 2025-01-01  --only "name part"  --groups (include groups)  --pause 3000 (ms between chats)
 //          --chat 94771234567,94779876543  skip the (slow) chat list and read just these numbers or chat ids
+//          --fresh  ignore _state.json and re-read everything (by default a rerun resumes where it stopped)
 const fs = require('fs');
 const path = require('path');
 
@@ -24,7 +25,7 @@ const LIMIT = Math.min(Number(opt('limit', 2000)) || 2000, 2000);
 const MIN = Number(opt('min', 3));
 const SINCE = opt('since') ? Date.parse(opt('since')) / 1000 : 0;
 const ONLY = (opt('only') || '').toLowerCase();
-const PAUSE = Number(opt('pause', 1500));
+const PAUSE = Number(opt('pause', 3000));
 const CHATS = (opt('chat') || '').split(',').map((x) => x.trim()).filter(Boolean);
 const TZ = process.env.TZ || 'Asia/Colombo';
 
@@ -38,13 +39,18 @@ async function get(p, tries = 4) {
   for (let i = 0; ; i++) {
     const res = await fetch(`${URL_}/api${p}`, { headers: { 'X-API-Key': KEY }, signal: AbortSignal.timeout(10 * 60_000) }).catch((e) => ({ ok: false, status: 0, text: async () => e.message }));
     if (res.ok) return res.json();
-    const retryable = [409, 503, 0].includes(res.status);
-    if (!retryable || i >= tries) {
+    const throttled = res.status === 429; // rate limit: wait it out (a minute window), don't give up
+    const retryable = throttled || [409, 503, 0].includes(res.status);
+    if (!retryable || i >= (throttled ? Math.max(tries, 5) : tries)) {
       const body = await res.text();
       if (res.status === 501) throw new Error('This engine cannot serve live history (needs whatsapp-web.js).');
       throw new Error(`GET ${p.split('?')[0]} -> ${res.status} ${body.slice(0, 120)}`);
     }
-    await sleep(3000 * (i + 1));
+    if (throttled) {
+      const wait = (Number(res.headers?.get('retry-after')) || 65) * 1000;
+      console.log(`  rate limited (429); waiting ${Math.round(wait / 1000)}s...`);
+      await sleep(wait);
+    } else await sleep(3000 * (i + 1));
   }
 }
 
@@ -85,17 +91,31 @@ async function phoneOf(chat) {
     .filter((c) => !ONLY || String(c.name || '').toLowerCase().includes(ONLY));
   console.log(`${chats.length} chats to read (${flag('groups') ? 'incl. groups' : '1:1 only'}), up to ${LIMIT} messages each.`);
 
-  const index = [];
-  const used = new Set();
+  // Resume: _state.json remembers finished chats (including skipped tiny ones) so a rerun continues where it stopped.
+  const stateFile = path.join(OUT, '_state.json');
+  let state = { done: [], index: [] };
+  if (!flag('fresh') && fs.existsSync(stateFile)) {
+    try { state = JSON.parse(fs.readFileSync(stateFile, 'utf8')); console.log(`Resuming: ${state.done.length} chats already done (use --fresh to start over).`); } catch { /* start over */ }
+  }
+  const done = new Set(state.done);
+  const index = state.index;
+  const used = new Set(index.map((r) => r.file.replace(/\.md$/, '').toLowerCase()));
+  const save = () => {
+    fs.writeFileSync(stateFile, JSON.stringify({ done: [...done], index }), { mode: 0o600 });
+    const sorted = [...index].sort((a, b) => b.last.localeCompare(a.last));
+    fs.writeFileSync(path.join(OUT, '_index.md'), ['# Exported chats', '', '| Person | Phone | Messages | Last message | File |', '|---|---|---|---|---|',
+      ...sorted.map((r) => `| ${r.name} | ${r.phone ? '+' + r.phone : ''} | ${r.count} | ${r.last} | ${r.file} |`)].join('\n') + '\n', { mode: 0o600 });
+  };
   let n = 0;
   for (const chat of chats) {
     n++;
+    if (done.has(chat.id)) continue;
     console.log(`  [${n}/${chats.length}] reading ${chat.name || chat.id.split('@')[0]}...`);
     let msgs;
     try { msgs = await get(`/sessions/${SESSION}/messages/${encodeURIComponent(chat.id)}/history?deep=true&limit=${LIMIT}`); }
     catch (e) { console.warn(`  [${n}/${chats.length}] ${chat.name || chat.id}: ${e.message}`); continue; }
     msgs = msgs.filter((m) => m.timestamp >= SINCE && m.type !== 'call');
-    if (msgs.length < MIN) { await sleep(PAUSE / 3); continue; }
+    if (msgs.length < MIN) { done.add(chat.id); await sleep(PAUSE / 3); continue; }
 
     const name = chat.name || chat.id.split('@')[0];
     const phone = await phoneOf(chat);
@@ -117,12 +137,12 @@ async function phoneOf(chat) {
     }
     fs.writeFileSync(path.join(OUT, `${file}.md`), out.join('\n') + '\n', { mode: 0o600 });
     index.push({ name, phone, count: msgs.length, last: stamp(msgs[msgs.length - 1].timestamp).slice(0, 10), file: `${file}.md` });
+    done.add(chat.id);
+    save();
     console.log(`  [${n}/${chats.length}] ${name}: ${msgs.length} messages`);
     await sleep(PAUSE); // be gentle: one chat at a time
   }
 
-  index.sort((a, b) => b.last.localeCompare(a.last));
-  fs.writeFileSync(path.join(OUT, '_index.md'), ['# Exported chats', '', '| Person | Phone | Messages | Last message | File |', '|---|---|---|---|---|',
-    ...index.map((r) => `| ${r.name} | ${r.phone ? '+' + r.phone : ''} | ${r.count} | ${r.last} | ${r.file} |`)].join('\n') + '\n', { mode: 0o600 });
+  save();
   console.log(`\nDone: ${index.length} transcripts in ${OUT}. Keep this folder out of git and delete it when you are finished.`);
 })().catch((e) => { console.error('Export failed:', e.message); process.exit(1); });

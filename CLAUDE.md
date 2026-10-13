@@ -15,6 +15,7 @@ WhatsApp → OpenWA (self-hosted gateway, separate container `openwa-api`) → w
 - `calendar.js` Google Calendar list/create/update/delete; tools are only declared when GOOGLE_* env is set
 - `google-auth.js` one-time interactive script (Desktop OAuth client, loopback redirect pasted by hand) that prints GOOGLE_REFRESH_TOKEN
 - `gmail.js` Gmail search/read/create-draft (no send, by design); tools only declared when GMAIL_ENABLED is set. `unreadDigest` feeds the briefing
+- `outbox.js` WhatsApp messages to other people from the bot's own number. The AI only drafts (`send_whatsapp`); `index.js` sends when the owner replies yes (typed, code-level check, 15 min expiry, `SEND_DAILY_LIMIT`). Never send from the personal session
 - `embeddings.js` Gemini embeddings of note chunks in SQLite (`note_chunks`); `vault.searchNotes` merges semantic + keyword hits
 - `tts.js` Gemini TTS -> ffmpeg -> OGG/Opus voice notes (only for replies to voice notes when `/voice` is on)
 - `weather.js` Open-Meteo forecast (no key); feeds the briefing, `/weather` and the `get_weather` tool
@@ -48,4 +49,4 @@ WhatsApp → OpenWA (self-hosted gateway, separate container `openwa-api`) → w
 ## Roadmap
 - Done: weather/contacts/profile/tasks (briefing now has weather, to-dos, birthdays); multi-calendar read + create on a chosen calendar (`Label=id` in GOOGLE_CALENDAR_IDS); Google Calendar tools + `/today`; morning briefing (`BRIEFING_TIME`, `/briefing`); Gmail read/draft tools; embedding note search; voice-note replies (`/voice`); image/PDF/text-file understanding.
 - Needs a one-time re-auth before Gmail works (new scopes in google-auth.js), plus `GMAIL_ENABLED=true`.
-- Next ideas: Gmail send behind an explicit confirm step, evening wrap-up, birthday reminders the day before, OCR-style receipt logging to notes, TTS for longer answers.
+- Next ideas: Gmail send behind the same confirm step as outbox.js, evening wrap-up, birthday reminders the day before, OCR-style receipt logging to notes, TTS for longer answers.

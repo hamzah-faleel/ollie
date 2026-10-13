@@ -18,7 +18,13 @@ async function generate(body) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-goog-api-key': KEY },
         body: JSON.stringify(body),
-      });
+      }).catch((e) => ({ networkError: `${e.message} (${e.cause?.code || e.cause?.message || 'no cause'})` }));
+      if (res.networkError) {
+        lastErr = `Gemini ${model} network error: ${res.networkError}`;
+        console.warn(`${lastErr}, retry ${attempt + 1}/3`);
+        await sleep(2000 * 2 ** attempt);
+        continue;
+      }
       if (res.ok) return res.json();
       lastErr = `Gemini ${model} ${res.status} ${await res.text()}`;
       if (res.status === 429) { quota = true; break; }

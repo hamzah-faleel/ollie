@@ -7,6 +7,7 @@ const weather = require('./weather');
 const contacts = require('./contacts');
 const profile = require('./profile');
 const tasks = require('./tasks');
+const outbox = require('./outbox');
 
 const TZ = process.env.TZ || 'Asia/Colombo';
 const fmt = (ms) => new Date(ms).toLocaleString('en-GB', { timeZone: TZ, weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
@@ -225,6 +226,11 @@ const lifeDeclarations = [
     description: 'Tick off an open task, by its number from list_tasks or words from its text.',
     parameters: { type: 'OBJECT', properties: { match: S('Task number or words from the task') }, required: ['match'] },
   },
+  {
+    name: 'send_whatsapp',
+    description: "Draft a WhatsApp message to another person on the owner's behalf. This does NOT send: the owner is shown the draft and must reply yes. Write the text in the owner's voice, first person, ready to send.",
+    parameters: { type: 'OBJECT', properties: { to: S("Contact name (from People) or a phone number"), text: S('The exact message to send') }, required: ['to', 'text'] },
+  },
 ];
 declarations.push(...lifeDeclarations);
 
@@ -268,6 +274,7 @@ const handlers = {
   search_emails: (a) => gmail.searchEmails(a),
   read_email: (a) => gmail.readEmail(a),
   create_email_draft: (a) => gmail.createDraft(a),
+  send_whatsapp: (a, ctx) => outbox.createDraft(a, ctx),
 };
 
 async function run(name, args, ctx) {

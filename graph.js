@@ -5,6 +5,13 @@ const { files } = require('./vault');
 
 const WIKILINK = /\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|[^\]]*)?\]\]/g;
 
+// `relationship:` value -> group label; vague or missing answers all land in "Unsorted".
+function relGroup(v) {
+  const r = v.replace(/^["']|["']$/g, '').trim().toLowerCase();
+  if (!r || ['unsure', 'unknown', 'none', 'n/a'].includes(r)) return 'Unsorted';
+  return r[0].toUpperCase() + r.slice(1);
+}
+
 async function collect() {
   const paths = await files.walkAll(); // local-only, so private notes are included
   const notes = [];
@@ -17,9 +24,11 @@ async function collect() {
     if (tl) tl[1].split(',').map((t) => t.trim().replace(/^#/, '')).filter(Boolean).forEach((t) => tags.add(t));
     for (const m of body.matchAll(/(?:^|\s)#([\w-]{2,30})\b/g)) tags.add(m[1]);
     const rel = files.rel(f);
+    const rl = fm && /^relationship:[ \t]*(.*?)[ \t]*$/m.exec(fm[1]);
+    const relationship = rl ? relGroup(rl[1]) : null;
     notes.push({
       id: notes.length, title: files.titleOf(f), path: rel,
-      folder: rel.includes('/') ? rel.split('/')[0] : 'Root',
+      folder: relationship || (rel.includes('/') ? rel.split('/')[0] : 'Root'), relationship,
       tags: [...tags].slice(0, 6), words: body.split(/\s+/).filter(Boolean).length, mtime: st.mtimeMs,
       preview: body.replace(/^#.*\n+/, '').replace(/\[\[([^\]|#]+)[^\]]*\]\]/g, '$1').replace(/\s+/g, ' ').trim().slice(0, 320),
       text: body,
@@ -35,7 +44,16 @@ async function collect() {
       if (to != null && to !== n.id && !seen.has(key)) { seen.add(key); links.push([n.id, to]); }
     }
   }
-  for (const n of notes) delete n.text;
+  // People notes are grouped (and coloured) by their `relationship:` field; each group with 2+ people gets a hub dot.
+  const groups = new Map();
+  for (const n of notes) if (n.relationship && n.relationship !== 'Unsorted') (groups.get(n.relationship) || groups.set(n.relationship, []).get(n.relationship)).push(n.id);
+  for (const [name, ids] of groups) {
+    if (ids.length < 2) continue;
+    const hub = notes.length;
+    notes.push({ id: hub, title: name, path: '(relationship group)', folder: name, relationship: name, tags: [], words: 0, mtime: Date.now(), preview: `${ids.length} people marked as ${name.toLowerCase()}.` });
+    for (const id of ids) links.push([hub, id]);
+  }
+  for (const n of notes) { delete n.text; delete n.relationship; }
   return { notes, links, generated: Date.now() };
 }
 
