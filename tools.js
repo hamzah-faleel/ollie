@@ -288,4 +288,15 @@ async function run(name, args, ctx) {
   }
 }
 
-module.exports = { declarations, run, fmt };
+// Same tools in OpenAI/OpenRouter format, derived from `declarations` (Gemini schema, uppercase types) so tools are defined once.
+const jsonSchema = (s) => {
+  if (Array.isArray(s)) return s.map(jsonSchema);
+  if (!s || typeof s !== 'object') return s;
+  return Object.fromEntries(Object.entries(s).map(([k, v]) => [k, k === 'type' && typeof v === 'string' ? v.toLowerCase() : jsonSchema(v)]));
+};
+const openaiTools = () => declarations.map((d) => ({
+  type: 'function',
+  function: { name: d.name, description: d.description, parameters: jsonSchema(d.parameters || { type: 'OBJECT', properties: {} }) },
+}));
+
+module.exports = { declarations, openaiTools, run, fmt };

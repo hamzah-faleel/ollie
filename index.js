@@ -270,6 +270,13 @@ async function handleCommand(cmd, sessionId, chatId) {
   return false;
 }
 
+// One proactive "top up" message per hour while the AI provider is out of credit.
+async function creditWarning(sessionId, chatId, provider) {
+  if (Date.now() - Number(db.getKv('last_credit_warning') || 0) < 3_600_000) return;
+  db.setKv('last_credit_warning', Date.now());
+  await sendText(sessionId, chatId, `AI credit ran out — top up ${provider}`).catch(() => {});
+}
+
 async function handle(event) {
   if (event.event !== 'message.received') return;
   const msg = event.data || {};
@@ -348,7 +355,10 @@ async function handle(event) {
     ok = true;
   } catch (e) {
     if (e instanceof ai.QuotaError) answer = "I've hit my free AI limit for now. Try again in a minute (or tomorrow if it's the daily cap).";
-    else if (e instanceof ai.BusyError) answer = "Google's AI is overloaded right now. Give it a minute and send that again.";
+    else if (e instanceof ai.CreditError) {
+      answer = 'The AI is unavailable right now: its credit ran out.';
+      await creditWarning(sessionId, msg.chatId, e.provider);
+    } else if (e instanceof ai.BusyError) answer = 'The AI is overloaded right now. Give it a minute and send that again.';
     else throw e;
   }
   await setTyping(sessionId, msg.chatId, 'paused');
