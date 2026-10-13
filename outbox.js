@@ -2,7 +2,9 @@
 // The AI can only DRAFT (send_whatsapp). A draft goes out only when the owner replies "yes" in chat, which index.js
 // handles in code before the AI sees it, so text inside an email or note can never trigger a send.
 const db = require('./db');
+const fs = require('fs/promises');
 const contacts = require('./contacts');
+const { files } = require('./vault');
 
 const CC = (process.env.DEFAULT_COUNTRY_CODE || '94').replace(/\D/g, '');
 const DAILY_LIMIT = Number(process.env.SEND_DAILY_LIMIT || 10);
@@ -29,6 +31,18 @@ const toChatId = (phone) => {
   return d.length >= 8 && d.length <= 15 ? { chatId: `${d}@c.us`, digits: d } : null;
 };
 
+// Names and phone numbers from Private/People, read here in code only. The AI never sees these notes or their names:
+// it passes along the name the owner typed, and only a phone number comes back out of this lookup.
+async function privateContacts() {
+  const out = [];
+  for (const f of await files.walkAll()) {
+    if (!files.rel(f).startsWith('Private/People/')) continue;
+    const phone = /^phone:[ \t]*(\S.*?)[ \t]*$/m.exec((await fs.readFile(f, 'utf8')).slice(0, 600))?.[1];
+    if (phone) out.push({ name: files.titleOf(f), phone });
+  }
+  return out;
+}
+
 async function resolve(to) {
   const raw = String(to || '').trim();
   if (/^\+?[\d\s()-]{7,}$/.test(raw)) {
@@ -38,6 +52,17 @@ async function resolve(to) {
   const { results = [] } = await contacts.findContact({ query: raw });
   const named = results.filter((c) => c.phone && c.name.toLowerCase().includes(raw.toLowerCase()));
   const pool = named.length ? named : results.filter((c) => c.phone).slice(0, 1);
+  if (!pool.length) {
+    const words = raw.toLowerCase().split(/\s+/).filter(Boolean);
+    const hits = (await privateContacts()).filter((c) => words.every((w) => c.name.toLowerCase().includes(w)));
+    const exact = hits.filter((c) => c.name.toLowerCase() === raw.toLowerCase());
+    const one = exact.length === 1 ? exact : hits;
+    if (one.length === 1) {
+      const r = toChatId(one[0].phone);
+      return r ? { ...r, name: one[0].name } : { error: 'The saved phone number for that person looks invalid.' };
+    }
+    if (one.length > 1) return { error: `${one.length} saved contacts match "${raw}". Ask the owner for the full name or the phone number.` };
+  }
   if (!pool.length) return { error: `No contact with a phone number matches "${raw}". Ask the owner for the number, or to save the contact first.` };
   if (pool.length > 1) return { error: `Several contacts match "${raw}": ${pool.map((c) => c.name).join(', ')}. Ask the owner which one.` };
   const r = toChatId(pool[0].phone);
@@ -56,7 +81,7 @@ async function createDraft({ to, text }, ctx) {
   db.prepare("UPDATE outbox SET status = 'cancelled' WHERE owner_chat = ? AND status = 'draft'").run(ctx.chatId);
   db.prepare('INSERT INTO outbox (owner_chat, session_id, to_name, to_chat, text, created_at) VALUES (?, ?, ?, ?, ?, ?)')
     .run(ctx.chatId, ctx.sessionId, r.name, r.chatId, text, Date.now());
-  return { ok: true, status: 'draft_awaiting_owner_confirmation', to: r.name, note: 'NOT sent. The system shows the owner the draft and sends only after they reply yes. Do not say it was sent.' };
+  return { ok: true, status: 'draft_awaiting_owner_confirmation', to: String(to).trim(), note: 'NOT sent. The system shows the owner the draft and sends only after they reply yes. Do not say it was sent.' };
 }
 
 function pendingDraft(ownerChat) {
