@@ -20,6 +20,7 @@ WhatsApp → OpenWA (self-hosted gateway, separate container `openwa-api`) → w
 - `google-auth.js` one-time interactive script (Desktop OAuth client, loopback redirect pasted by hand) that prints GOOGLE_REFRESH_TOKEN
 - `gmail.js` Gmail search/read/create-draft (no send, by design); tools only declared when GMAIL_ENABLED is set. `unreadDigest` feeds the briefing
 - `outbox.js` WhatsApp messages to other people from the bot's own number. The AI only drafts (`send_whatsapp`); `index.js` sends when the owner replies yes (typed, code-level check, 15 min expiry, `SEND_DAILY_LIMIT`). Names are also looked up in `Private/People` in code only (phone numbers; the AI never sees those notes). Never send from the personal session
+- `inbox.js` read-only personal inbox: stores incoming messages from the personal session (SQLite `inbox_messages`, `INBOX_RETENTION_DAYS`, OTP/card numbers redacted), `/inbox` digest via `ai.untrusted()`
 - `embeddings.js` Gemini embeddings of note chunks in SQLite (`note_chunks`); `vault.searchNotes` merges semantic + keyword hits
 - `tts.js` Gemini TTS -> ffmpeg -> OGG/Opus voice notes (only for replies to voice notes when `/voice` is on)
 - `weather.js` Open-Meteo forecast (no key); feeds the briefing, `/weather` and the `get_weather` tool
@@ -37,7 +38,7 @@ WhatsApp → OpenWA (self-hosted gateway, separate container `openwa-api`) → w
 - AI privacy: OpenRouter requests must keep `provider: { zdr: true, data_collection: 'deny', allow_fallbacks: false, require_parameters: true }`.
 - Embeddings and TTS still call Gemini directly (`GEMINI_API_KEY`), whatever `AI_PROVIDER` is.
 - Notes are the source of truth as `.md` files (owner also edits them in Obsidian). Never store notes only in SQLite.
-- Privacy: anything under the vault's top-level `Private/` folder is hidden from the AI (search, read_note, embeddings, find_contact); only `/graph` and Obsidian see it. Chat-derived summaries go there. Never add a webhook to the owner's personal (read-only) OpenWA session; `BOT_SESSION_ID` pins the bot to its own session. See `scripts/CHAT_IMPORT.md`.
+- Privacy: anything under the vault's top-level `Private/` folder is hidden from the AI (search, read_note, embeddings, find_contact); only `/graph` and Obsidian see it. Chat-derived summaries go there. `BOT_SESSION_ID` pins the bot's own behaviour to its own session. The owner's personal OpenWA session (`PERSONAL_SESSION_ID`) is READ-ONLY: since 2026-10-13 the owner allows a message.received webhook on it, but only for `inbox.js` (store messages, summarize on `/inbox`). Everything from that session is routed to storage before any bot logic; `openwa()` refuses every non-GET call to it; summaries use `ai.untrusted()` (OpenRouter ZDR routing, no tools, fails closed, never Gemini direct); digests are sent directly and not saved to chat memory. Do not widen this (no replies, no tools on that text, no non-ZDR models). See `scripts/CHAT_IMPORT.md`.
 - Times: owner is in Asia/Colombo (UTC+05:30). Reminders are stored as epoch ms.
 
 ## Runtime

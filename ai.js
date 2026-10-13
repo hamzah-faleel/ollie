@@ -39,4 +39,10 @@ async function run(systemPrompt, history, ctx, media) {
   return { text: 'I got stuck in a loop doing that. Could you rephrase?', toolsUsed };
 }
 
-module.exports = { reply, QuotaError, BusyError, CreditError, bus, providerName: provider.name };
+// Summarize text from other people with no tools, only via OpenRouter's zero-data-retention routing. Fails closed otherwise.
+async function untrusted(system, user) {
+  if (typeof provider.plain !== 'function') throw new Error('Inbox processing needs AI_PROVIDER=openrouter (zero-data-retention routing).');
+  return turnStore.run(crypto.randomUUID(), () => provider.plain(system, user));
+}
+
+module.exports = { reply, untrusted, QuotaError, BusyError, CreditError, bus, providerName: provider.name };

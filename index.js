@@ -20,6 +20,7 @@ const cfg = {
   timezone: process.env.TZ || 'Asia/Colombo',
   botName: process.env.BOT_NAME || 'Sec',
   voiceReplies: /^(1|true|on|yes)$/i.test(process.env.VOICE_REPLIES || ''), // default for /voice, per-owner toggle overrides
+  personalSession: (process.env.PERSONAL_SESSION_ID || '').trim(), // owner's personal session: read-only, messages are only stored for /inbox
   botSession: (process.env.BOT_SESSION_ID || '').trim(), // optional: only handle events from this OpenWA session id
   briefingTime: (process.env.BRIEFING_TIME ?? '07:00').trim(), // HH:MM local time; empty disables
 };
@@ -43,6 +44,7 @@ const tasks = require('./tasks');
 const graph = require('./graph');
 const usage = require('./usage');
 const models = require('./models');
+const inbox = require('./inbox');
 const { fmt } = require('./tools');
 
 async function systemPrompt() {
@@ -73,6 +75,10 @@ ${calendar.enabled() ? `- Calendar: for "what's on", "am I free", or scheduling 
 
 // ---------- OpenWA ----------
 async function openwa(path, opts = {}) {
+  // The personal session is read-only, enforced here for every send, typing indicator, presence call and so on.
+  if (cfg.personalSession && path.startsWith(`/sessions/${encodeURIComponent(cfg.personalSession)}`) && (opts.method || 'GET').toUpperCase() !== 'GET') {
+    throw new Error('Refusing to write to the personal session (read-only).');
+  }
   const res = await fetch(`${cfg.openwaUrl}/api${path}`, {
     ...opts,
     headers: { 'X-API-Key': cfg.openwaKey, ...(opts.body ? { 'Content-Type': 'application/json' } : {}) },
@@ -168,6 +174,7 @@ const HELP = `*What I can do*
 /weather - 3-day forecast
 /graph - an interactive map of your notes (HTML file)
 /briefing - send the morning briefing now
+/inbox - summary of new messages from your personal WhatsApp (/inbox <name>, /inbox status, /inbox clear)
 /usage - AI messages, tokens and cost (today, week, month)
 /model - show or switch the AI model (/model <slug>, /model reset)
 /voice - toggle spoken replies to your voice notes
@@ -254,6 +261,19 @@ async function handleCommand(cmd, sessionId, chatId, args = '') {
       ? 'Voice replies on: when you send me a voice note, I will also answer with a voice note (short answers only).'
       : 'Voice replies off. I will answer in text only.');
   }
+  if (cmd === '/inbox') {
+    if (!cfg.personalSession) return sendText(sessionId, chatId, 'The personal inbox is not set up (PERSONAL_SESSION_ID is empty).');
+    const arg = args.trim();
+    await setTyping(sessionId, chatId, 'typing');
+    let out;
+    try {
+      out = arg === 'status' ? inbox.status() : arg === 'clear' ? inbox.clear() : arg ? await inbox.about(arg) : await inbox.digest();
+    } catch (e) {
+      console.error('[inbox]', e.message);
+      out = e instanceof ai.CreditError ? 'The AI is unavailable right now: its credit ran out.' : `I couldn't summarize the inbox just now (${e.message.slice(0, 120)}). Nothing was lost; try again in a minute.`;
+    }
+    return sendText(sessionId, chatId, out); // sent directly, not saved to chat memory, so the tool-enabled assistant never sees it
+  }
   if (cmd === '/usage') return sendText(sessionId, chatId, usage.report());
   if (cmd === '/model') {
     if (ai.providerName !== 'openrouter') return sendText(sessionId, chatId, `Model switching only works with AI_PROVIDER=openrouter (currently ${ai.providerName}).`);
@@ -307,6 +327,10 @@ async function handle(event) {
   if (event.event !== 'message.received') return;
   const msg = event.data || {};
   const sessionId = event.sessionId;
+  if (cfg.personalSession && sessionId === cfg.personalSession) { // other people's messages: store only, never answer or act
+    if (inbox.ingest(event)) console.log('[inbox] stored 1 message');
+    return;
+  }
   if (cfg.botSession && sessionId !== cfg.botSession) return; // e.g. a read-only personal session: never act on it
   if (msg.fromMe || msg.isGroup || msg.kind !== 'individual') return;
 

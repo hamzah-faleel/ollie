@@ -33,7 +33,7 @@ async function complete(state, tools) {
         body: JSON.stringify({
           model,
           messages: state.messages,
-          tools: tools.openaiTools(),
+          ...(tools ? { tools: tools.openaiTools() } : {}),
           max_tokens: 2048, // no temperature: GPT-6 Luna endpoints don't support it, and require_parameters then finds no endpoint (404)
           provider: PRIVACY,
           usage: { include: true },
@@ -69,17 +69,28 @@ async function complete(state, tools) {
   throw lastStatus === 429 ? new QuotaError(lastErr) : new BusyError(lastErr);
 }
 
+// Main model (runtime-switchable) then fallback. Over the daily spend limit: cheapest first.
+async function modelList() {
+  const cur = models.current();
+  let list = [cur.main, cur.fallback].filter((m, i, a) => m && a.indexOf(m) === i);
+  if (usage.overLimit()) {
+    const cheap = await models.cheapest(list);
+    list = [cheap, ...list.filter((m) => m !== cheap)];
+    bus.emit('spend-limit', { spent: usage.spentToday(), limit: usage.limit(), model: cheap });
+  }
+  return list;
+}
+
 module.exports = {
   name: 'openrouter',
+  // One tool-less request for text we do not trust (other people's messages). Same privacy routing as every request,
+  // and no tools are sent, so nothing in the text can make the bot do anything.
+  async plain(system, user) {
+    const state = { messages: [{ role: 'system', content: system }, { role: 'user', content: user }], models: await modelList(), modelIdx: 0 };
+    return String((await complete(state, null)).content || '').trim();
+  },
   async start(systemPrompt, history, media) {
-    // Main model (runtime-switchable) then fallback. Over the daily spend limit: cheapest first.
-    const cur = models.current();
-    let list = [cur.main, cur.fallback].filter((m, i, a) => m && a.indexOf(m) === i);
-    if (usage.overLimit()) {
-      const cheap = await models.cheapest(list);
-      list = [cheap, ...list.filter((m) => m !== cheap)];
-      bus.emit('spend-limit', { spent: usage.spentToday(), limit: usage.limit(), model: cheap });
-    }
+    const list = await modelList();
     // The clock changes every second; keep it out of the system prompt so the prompt prefix can be cached,
     // and put it on the newest user message instead.
     const clock = (CLOCK.exec(systemPrompt) || [''])[0];

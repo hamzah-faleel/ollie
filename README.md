@@ -72,6 +72,16 @@ Voice notes always go through Groq Whisper. Embeddings (note search) and voice r
 Tell the bot "message Sam that I'm running late". It writes a draft and shows you the exact text. Nothing is sent until you reply `yes` (typed, not a voice note); `no` cancels, and asking for a change makes a new draft. Drafts expire after 15 minutes, and `SEND_DAILY_LIMIT` (default 10 per 24h) caps sends. Messages come from the bot's own number, never from your personal WhatsApp session.
 Names are looked up in `People/` first, then in `Private/People` (in code only, the AI never sees those notes). Numbers starting with `0` get `DEFAULT_COUNTRY_CODE` (default 94). To add contacts in bulk, send the bot a `.vcf` export.
 
+## Personal inbox (read-only)
+The bot can read new messages from your personal WhatsApp (everyone, groups included) and summarize them on request. It never replies from that session, and the code refuses any write to it.
+- **Storage:** each incoming message (text, or the caption/type for media) is saved in `bot.db` on your server for `INBOX_RETENTION_DAYS` (default 30). Status updates are skipped, and OTP-style codes and card-like numbers are removed before saving. `/inbox clear` deletes everything.
+- **Processing:** `/inbox` summarizes everything new since the last digest; `/inbox <name>` covers one person or group over 7 days; `/inbox status` shows counts. Summaries go through OpenRouter with the zero-data-retention settings and **no tools**, so text from other people cannot make the bot do anything. If no compliant model is available it fails and nothing is sent elsewhere. It needs `AI_PROVIDER=openrouter`.
+- **Isolation:** the digest is sent straight to you and not saved to the chat memory, so the main assistant (which has tools) never sees other people's messages.
+- **Setup:** set `PERSONAL_SESSION_ID` in `.env` and rebuild, then register a webhook on the personal session using a key that can access it (the bot's own key can't). Use the same secret as `WEBHOOK_SECRET`:
+  `curl -X POST http://127.0.0.1:2785/api/sessions/<personal session id>/webhooks -H "X-API-Key: <key>" -H "Content-Type: application/json" -d '{"url":"http://wa-bot:3000/webhook","events":["message.received"],"secret":"<WEBHOOK_SECRET>"}'`
+  To stop: delete that webhook (`DELETE .../webhooks/<id>`) and run `/inbox clear`.
+- **Know the trade-off:** zero data retention means the provider shouldn't keep or train on the text, but your friends' messages still leave the server to OpenRouter and its provider for processing.
+
 ## Private notes
 Anything under the vault's top-level `Private/` folder is hidden from the AI (search, read_note, embeddings, find_contact). Chat-derived summaries live in `Private/People`; see `scripts/CHAT_IMPORT.md`. `/graph` and Obsidian still show them.
 
