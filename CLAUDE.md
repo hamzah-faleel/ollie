@@ -5,11 +5,15 @@ Single-user: it only ever answers numbers in OWNER_NUMBERS.
 
 ## Architecture
 WhatsApp → OpenWA (self-hosted gateway, separate container `openwa-api`) → webhook POST → this bot
-→ Groq Whisper (voice transcription) → Gemini (generateContent + function calling) → tools → reply via OpenWA REST API.
+→ Groq Whisper (voice transcription) → AI provider (OpenRouter chat completions, or Gemini generateContent, with function calling) → tools → reply via OpenWA REST API.
 
 - `index.js` webhook server (HMAC-verified, `X-OpenWA-Signature`), message handling, WhatsApp commands, reminder scheduler (every 20s)
-- `ai.js` Gemini tool loop; retries 500/503, falls back to GEMINI_FALLBACK_MODEL; echoes model turns verbatim (thought signatures)
-- `tools.js` tool declarations (Gemini schema, uppercase types) + handlers: reminders, notes, calendar
+- `ai.js` provider-independent tool loop (max 6 steps); `AI_PROVIDER=openrouter|gemini`. Providers are flat files because the Dockerfile only copies `*.js`
+- `ai-openrouter.js` OpenAI-compatible chat completions; sends ZDR/no-collection routing on every request; retries 429/500/502/503 (2/4/8s), then fallback model; 404 = no allowed endpoint -> fallback; 402 -> `CreditError`; clock moved out of the system prompt (cacheable)
+- `ai-gemini.js` the original Gemini path; retries 500/503, falls back to GEMINI_FALLBACK_MODEL; echoes model turns verbatim (thought signatures)
+- `ai-common.js` error classes, one-line `[ai]` usage log (also writes `ai_usage`), turn ids, `bus` (spend-limit event)
+- `usage.js` `ai_usage` table, `/usage` report, daily spend guard (`DAILY_SPEND_LIMIT_USD`); `models.js` runtime main model in SQLite kv (`model_main`), OpenRouter model list + prices
+- `tools.js` tool declarations (Gemini schema, uppercase types; `openaiTools()` derives the OpenAI format, so tools are defined once) + handlers: reminders, notes, calendar
 - `db.js` SQLite via built-in `node:sqlite`: `messages` (chat history), `reminders`
 - `google.js` OAuth refresh-token -> access-token cache + `api()` helper (shared by future Gmail tools)
 - `calendar.js` Google Calendar list/create/update/delete; tools are only declared when GOOGLE_* env is set
@@ -29,7 +33,9 @@ WhatsApp → OpenWA (self-hosted gateway, separate container `openwa-api`) → w
 ## Constraints
 - Zero npm dependencies on purpose: Node 22 built-ins only (http, crypto, fetch, FormData, node:sqlite). Ask before adding packages. (System packages in the Dockerfile: git, ffmpeg.)
 - Email content is untrusted (prompt injection): the Gmail tools can only draft, never send.
-- Free-tier AI: Gemini free tier (rate limits, 429 = quota, 503 = busy). Keep token usage lean.
+- AI cost: default is OpenRouter with low-cost models (gpt-6-luna, gemini flash-lite), paid per token; Gemini free tier is the alternative (429 = quota, 503 = busy). Keep token usage lean. Never print, log or commit API keys.
+- AI privacy: OpenRouter requests must keep `provider: { zdr: true, data_collection: 'deny', allow_fallbacks: false, require_parameters: true }`.
+- Embeddings and TTS still call Gemini directly (`GEMINI_API_KEY`), whatever `AI_PROVIDER` is.
 - Notes are the source of truth as `.md` files (owner also edits them in Obsidian). Never store notes only in SQLite.
 - Privacy: anything under the vault's top-level `Private/` folder is hidden from the AI (search, read_note, embeddings, find_contact); only `/graph` and Obsidian see it. Chat-derived summaries go there. Never add a webhook to the owner's personal (read-only) OpenWA session; `BOT_SESSION_ID` pins the bot to its own session. See `scripts/CHAT_IMPORT.md`.
 - Times: owner is in Asia/Colombo (UTC+05:30). Reminders are stored as epoch ms.
@@ -43,10 +49,12 @@ WhatsApp → OpenWA (self-hosted gateway, separate container `openwa-api`) → w
 ## Commands
 - Rebuild + restart: `cd ~/OpenWA && docker compose up -d --build wa-bot`
 - Logs: `docker logs -f wa-bot`
+- Mock tests: `docker run --rm -v "$PWD":/app -w /app node:22-alpine node --disable-warning=ExperimentalWarning scripts/test-mock.js`
+- After a rebuild check the bot's OpenWA session and `POST /api/sessions/<id>/start` if `disconnected`
 - Syntax check (no node on host): `docker run --rm -v "$PWD":/app -w /app node:22-alpine sh -c 'for f in *.js scripts/*.js; do node --check $f; done'`
 - Secrets live in `.env` (never commit it).
 
 ## Roadmap
-- Done: weather/contacts/profile/tasks (briefing now has weather, to-dos, birthdays); multi-calendar read + create on a chosen calendar (`Label=id` in GOOGLE_CALENDAR_IDS); Google Calendar tools + `/today`; morning briefing (`BRIEFING_TIME`, `/briefing`); Gmail read/draft tools; embedding note search; voice-note replies (`/voice`); image/PDF/text-file understanding.
+- Done: weather/contacts/profile/tasks (briefing now has weather, to-dos, birthdays); multi-calendar read + create on a chosen calendar (`Label=id` in GOOGLE_CALENDAR_IDS); Google Calendar tools + `/today`; morning briefing (`BRIEFING_TIME`, `/briefing`); Gmail read/draft tools; embedding note search; voice-note replies (`/voice`); image/PDF/text-file understanding; OpenRouter provider + `/usage` + `/model` + daily spend guard; confirm-to-send WhatsApp messages (`outbox.js`); `/graph` coloured by relationship.
 - Needs a one-time re-auth before Gmail works (new scopes in google-auth.js), plus `GMAIL_ENABLED=true`.
 - Next ideas: Gmail send behind the same confirm step as outbox.js, evening wrap-up, birthday reminders the day before, OCR-style receipt logging to notes, TTS for longer answers.
