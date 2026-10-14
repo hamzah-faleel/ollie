@@ -15,6 +15,7 @@ const listen = (srv) => new Promise((r) => srv.listen(0, '127.0.0.1', () => r(sr
 const body = (req) => new Promise((r) => { const c = []; req.on('data', (d) => c.push(d)); req.on('end', () => r(Buffer.concat(c).toString())); });
 
 let script = [];            // queued OpenRouter responses: { status, json }
+let dynamic = null;         // optional function(request) -> response, used for the memory-note calls
 const orRequests = [];      // what the bot sent to OpenRouter
 const sent = [];            // what the bot sent to WhatsApp
 const MODELS = { data: [
@@ -28,17 +29,38 @@ const orSrv = http.createServer(async (req, res) => {
   const j = JSON.parse(await body(req));
   orRequests.push(j);
   if (j.temperature !== undefined && j.provider?.require_parameters) { res.writeHead(404, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: { code: 404, message: 'No endpoints found that can handle the requested parameters' } })); } // real behaviour with Luna
-  const next = script.shift() || { status: 500, json: { error: { message: 'script empty' } } };
+  const dyn = dynamic && dynamic(j);
+  const next = dyn || script.shift() || { status: 500, json: { error: { message: 'script empty' } } };
   if (next.json.model === 'mock') next.json = { ...next.json, model: j.model }; // answer as the model that was asked for
   res.writeHead(next.status, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(next.json));
 });
 const owCalls = [];         // every request the bot made to OpenWA ("METHOD /path")
+// Synthetic personal-session history served to the bot's read-only key (invented people only).
+const T0 = Math.floor(Date.now() / 1000) - 40 * 86400;
+const hist = (start, n, big) => Array.from({ length: n }, (_, i) => ({ id: `h${start}-${i}`, timestamp: T0 + start * 1000 + i * 60, fromMe: i % 2 === 1, type: 'text', body: big ? 'x'.repeat(1990) : `message ${i} in chat ${start}` }));
+const CHATS = [
+  { id: '94711110010@c.us', name: 'Test Carol', kind: 'individual' },
+  { id: '777000111@lid', name: 'Test Dave', kind: 'individual' },
+  { id: '94711110012@c.us', name: 'Test Frank', kind: 'individual' },
+  { id: '94711110013@c.us', name: 'Test Gina', kind: 'individual' },
+  { id: '94711110014@c.us', name: 'Test Erin', kind: 'individual' },
+  { id: '120363000@g.us', name: 'Test Group', kind: 'group' },
+  { id: '94711110015@c.us', name: 'Test Henry', kind: 'individual' },
+];
+const HISTORY = { '94711110010@c.us': hist(1, 6), '777000111@lid': hist(2, 4), '94711110012@c.us': hist(3, 4), '94711110013@c.us': hist(4, 4), '94711110014@c.us': hist(5, 2), '94711110015@c.us': hist(9, 3, true) };
+const owGets = [];          // [method, url, x-api-key] for requests under the personal session
 const owSrv = http.createServer(async (req, res) => {
   const b = await body(req);
   owCalls.push(`${req.method} ${req.url}`);
+  if (req.url.includes('/personal-1')) owGets.push([req.method, req.url, req.headers['x-api-key']]);
   if (req.url.endsWith('/send-text')) sent.push(JSON.parse(b).text);
-  res.writeHead(200, { 'Content-Type': 'application/json' }); res.end('{}');
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  let out = {};
+  if (req.method === 'GET' && /\/sessions\/personal-1\/chats/.test(req.url)) out = CHATS;
+  else if (req.method === 'GET' && /\/messages\/.+\/history/.test(req.url)) out = HISTORY[decodeURIComponent(/messages\/([^/]+)\/history/.exec(req.url)[1])] || [];
+  else if (req.method === 'GET' && /\/contacts\/.+\/phone/.test(req.url)) out = { phone: '94722220002' };
+  res.end(JSON.stringify(out));
 });
 
 const text = (t, cost) => ({ status: 200, json: { model: 'mock', choices: [{ message: { role: 'assistant', content: t } }], usage: { prompt_tokens: 100, completion_tokens: 10, prompt_tokens_details: { cached_tokens: 64 }, ...(cost != null ? { cost } : {}) } } });
@@ -68,7 +90,8 @@ const check = (name, ok, info = '') => { console.log(`${ok ? 'PASS' : 'FAIL'}  $
   const dbPath = path.join(tmp, 'bot.db');
   const botEnv = { PATH: process.env.PATH, PORT: botPort, OPENWA_URL: `http://127.0.0.1:${owPort}`, OPENWA_API_KEY: 'k', WEBHOOK_SECRET: SECRET, OWNER_NUMBERS: OWNER,
     GEMINI_API_KEY: 'unused', AI_PROVIDER: 'openrouter', OPENROUTER_API_KEY: 'sk-or-test', OPENROUTER_BASE_URL: `http://127.0.0.1:${orPort}`,
-    OPENROUTER_MODEL: 'main/model', OPENROUTER_FALLBACK_MODEL: 'fallback/model', AI_RETRY_BASE_MS: '20', DAILY_SPEND_LIMIT_USD: '0.0005', BRIEFING_TIME: '', PERSONAL_SESSION_ID: 'personal-1', DB_PATH: dbPath, VAULT_DIR: path.join(tmp, 'vault'), TZ: 'Asia/Colombo' };
+    OPENROUTER_MODEL: 'main/model', OPENROUTER_FALLBACK_MODEL: 'fallback/model', AI_RETRY_BASE_MS: '20', DAILY_SPEND_LIMIT_USD: '0.0005', BRIEFING_TIME: '', PERSONAL_SESSION_ID: 'personal-1', OPENWA_PERSONAL_KEY: 'pk-test', MEMORY_TIME: '', MEMORY_PAUSE_MS: '0',
+    MEMORY_MIN_MESSAGES: '3', MEMORY_BACKFILL_CHATS: '3', MEMORY_NIGHTLY_CHARS: '6000', DB_PATH: dbPath, VAULT_DIR: path.join(tmp, 'vault'), TZ: 'Asia/Colombo' };
   let log = '';
   const startBot = async () => {
     const child = spawn('node', ['--disable-warning=ExperimentalWarning', 'index.js'], { cwd: path.join(__dirname, '..'), env: botEnv });
@@ -77,6 +100,11 @@ const check = (name, ok, info = '') => { console.log(`${ok ? 'PASS' : 'FAIL'}  $
     if (!(await until(() => log.slice(mark).includes('listening')))) { console.log(log); throw new Error('bot did not start'); }
     return child;
   };
+  // An existing hand-edited note for Dave (matched by phone, must be merged into, never duplicated).
+  const peopleDir = path.join(tmp, 'vault', 'Private', 'People');
+  fs.mkdirSync(peopleDir, { recursive: true });
+  const daveFile = path.join(peopleDir, '+94 72 222 0002.md');
+  fs.writeFileSync(daveFile, '---\nprivate: true\nphone: +94722220002\nrelationship: friend\nlast_contact: 2026-01-01\n---\n# Dave\n## Snapshot\nHand-written: likes cricket.\n## Open loops\n- none\n## Key moments\n- met in 2020\n');
   let bot = await startBot();
 
   const reset = () => { sent.length = 0; orRequests.length = 0; };
@@ -201,6 +229,45 @@ const check = (name, ok, info = '') => { console.log(`${ok ? 'PASS' : 'FAIL'}  $
   await personal(botPort, '94711110004', 'privacy failure test', { name: 'Test Bob' });
   await sleep(300); await say(botPort, '/inbox');
   check('privacy failure: fails closed, nothing sent to a non-compliant model, messages kept', await until(() => /couldn't summarize/i.test(lastSent())) && db.prepare('SELECT COUNT(*) n FROM inbox_messages WHERE seen = 0').get().n === 1 && orRequests.every((r) => r.provider?.zdr === true), lastSent());
+
+  // ---- Nightly memory: backfill old history + fold into Private/People notes (synthetic chats only) ----
+  reset(); await say(botPort, '/inbox clear'); await until(() => /Deleted/.test(lastSent()));
+  db.exec('DELETE FROM ai_usage'); // clear the earlier spend-guard state so the background job is allowed to run
+  const memCalls = [];
+  dynamic = (j) => {
+    if (!/You maintain a private memory note/.test(j.messages?.[0]?.content || '')) return null;
+    memCalls.push(j);
+    const user = j.messages[1].content;
+    const name = /chat="([^"]+)"/.exec(user)[1];
+    const existing = /<existing_note>\n([\s\S]*?)\n<\/existing_note>/.exec(user)[1];
+    if (name === 'Test Frank') return text('SKIP');
+    if (name === 'Test Gina') return text('# Test Gina\n## Snapshot\nshort'); // incomplete -> must be rejected
+    const base = existing === '(none yet)' ? `# ${name}\n## Snapshot\nMock summary.\n## How we talk\nx\n## Open loops\n- none\n## Key moments\n- first\n## Facts\nnone` : existing;
+    return text(`${base}\n- mock added a key moment`);
+  };
+  reset(); await say(botPort, '/memory run');
+  check('/memory run starts in the background', await until(() => sent.some((x) => /^Started/.test(x))), JSON.stringify(sent));
+  check('memory run reports when done', await until(() => sent.some((x) => /Memory run done/.test(x)), 20000), JSON.stringify(sent));
+  const carol = path.join(peopleDir, 'Test Carol.md');
+  const carolText = fs.existsSync(carol) ? fs.readFileSync(carol, 'utf8') : '';
+  check('new person: note created in Private/People with phone, relationship and last_contact', /private: true/.test(carolText) && /phone: \+94711110010/.test(carolText) && /relationship: unsure/.test(carolText) && /last_contact: \d{4}-\d{2}-\d{2}/.test(carolText) && /## Snapshot/.test(carolText), carolText.slice(0, 200));
+  const daveText = fs.readFileSync(daveFile, 'utf8');
+  check('existing note (matched by phone via @lid lookup) is merged, hand-written text and relationship kept', /Hand-written: likes cricket/.test(daveText) && /relationship: friend/.test(daveText) && /mock added a key moment/.test(daveText) && !/last_contact: 2026-01-01/.test(daveText), daveText);
+  check('no duplicate note for Dave', fs.readdirSync(peopleDir).filter((f) => /dave|222 0002/i.test(f)).length === 1, fs.readdirSync(peopleDir).join(','));
+  check('automated chat (SKIP): no note created', !fs.existsSync(path.join(peopleDir, 'Test Frank.md')));
+  check('groups are never turned into notes or stored', !fs.readdirSync(peopleDir).some((f) => /group/i.test(f)) && db.prepare("SELECT COUNT(*) n FROM inbox_messages WHERE chat_id LIKE '%@g.us'").get().n === 0);
+  check('model saw the existing note and both sides of the chat', memCalls.some((c) => /Hand-written: likes cricket/.test(c.messages[1].content) && /\] Me: /.test(c.messages[1].content)));
+  check('every memory request: tool-less, ZDR routing, untrusted-data warning', memCalls.length >= 3 && memCalls.every((c) => c.tools === undefined && c.provider?.zdr === true && c.provider?.allow_fallbacks === false && /UNTRUSTED/.test(c.messages[0].content)));
+  check('personal session: only GETs, with the personal key (never the bot key)', owGets.length > 3 && owGets.every(([m, , k]) => m === 'GET' && k === 'pk-test'), JSON.stringify(owGets.filter(([m, , k]) => m !== 'GET' || k !== 'pk-test')));
+  check('backfilled history is not dumped into /inbox', (reset(), await say(botPort, '/inbox'), await until(() => /No new messages/.test(lastSent()))), lastSent());
+  reset(); await say(botPort, '/memory run');
+  check('second run finishes the remaining chats (cap per run), stops at the nightly budget on a huge chat', await until(() => sent.some((x) => /Memory run done/.test(x) && /budget/.test(x)), 20000), JSON.stringify(sent));
+  check('incomplete model output rejected: no note, messages kept for the next run', !fs.existsSync(path.join(peopleDir, 'Test Gina.md')) && db.prepare("SELECT COUNT(*) n FROM inbox_messages WHERE chat_id = '94711110013@c.us' AND consolidated = 0").get().n === 4 && sent.some((x) => /rejected as incomplete/.test(x)), JSON.stringify(sent));
+  check('chat with only 2 messages is skipped, not stored', db.prepare("SELECT COUNT(*) n FROM inbox_messages WHERE chat_id = '94711110014@c.us'").get().n === 0);
+  check('huge chat left for another night', db.prepare("SELECT COUNT(*) n FROM inbox_messages WHERE chat_id = '94711110015@c.us' AND consolidated = 0").get().n === 3);
+  reset(); await say(botPort, '/memory');
+  check('/memory shows status', await until(() => /\*Memory\*/.test(lastSent()) && /Last run/.test(lastSent())), lastSent());
+  dynamic = null;
 
   bot.kill();
   orSrv.close(); owSrv.close();

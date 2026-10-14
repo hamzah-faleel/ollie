@@ -45,6 +45,7 @@ const graph = require('./graph');
 const usage = require('./usage');
 const models = require('./models');
 const inbox = require('./inbox');
+const memory = require('./memory');
 const { fmt } = require('./tools');
 
 async function systemPrompt() {
@@ -175,6 +176,7 @@ const HELP = `*What I can do*
 /graph - an interactive map of your notes (HTML file)
 /briefing - send the morning briefing now
 /inbox - summary of new messages from your personal WhatsApp (/inbox <name>, /inbox status, /inbox clear)
+/memory - status of the nightly update of your private People notes (/memory run to do it now)
 /usage - AI messages, tokens and cost (today, week, month)
 /model - show or switch the AI model (/model <slug>, /model reset)
 /voice - toggle spoken replies to your voice notes
@@ -273,6 +275,14 @@ async function handleCommand(cmd, sessionId, chatId, args = '') {
       out = e instanceof ai.CreditError ? 'The AI is unavailable right now: its credit ran out.' : `I couldn't summarize the inbox just now (${e.message.slice(0, 120)}). Nothing was lost; try again in a minute.`;
     }
     return sendText(sessionId, chatId, out); // sent directly, not saved to chat memory, so the tool-enabled assistant never sees it
+  }
+  if (cmd === '/memory') {
+    if (!cfg.personalSession) return sendText(sessionId, chatId, 'The personal inbox is not set up (PERSONAL_SESSION_ID is empty).');
+    if (args.trim() !== 'run') return sendText(sessionId, chatId, `${memory.status()}\n\n/memory run - update your notes now (runs in the background; I'll message you when it finishes).`);
+    memory.run().then((r) => sendText(sessionId, chatId, memory.describe(r)))
+      .catch((e) => { console.error('[memory]', e.message); return sendText(sessionId, chatId, `Memory run failed: ${e.message.slice(0, 120)}`); })
+      .catch(() => {});
+    return sendText(sessionId, chatId, 'Started. Updating your private notes from your messages; this can take a few minutes.');
   }
   if (cmd === '/usage') return sendText(sessionId, chatId, usage.report());
   if (cmd === '/model') {
@@ -540,5 +550,9 @@ vault.init()
     setTimeout(reindex, 5_000);
     setInterval(reindex, 10 * 60_000); // also catches notes edited in Obsidian
     setInterval(() => briefingTick().catch((e) => console.error('[briefing]', e.message)), 60_000);
+    setInterval(() => memory.tick(async (text) => {  // nightly memory run; only speaks up when something needs attention
+      const target = JSON.parse(db.getKv('owner_target') || 'null');
+      if (target) await sendText(target.sessionId, target.chatId, text).catch(() => {});
+    }), 60_000);
     tick();
   });

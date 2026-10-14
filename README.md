@@ -82,6 +82,14 @@ The bot can read new messages from your personal WhatsApp (everyone, groups incl
   To stop: delete that webhook (`DELETE .../webhooks/<id>`) and run `/inbox clear`.
 - **Know the trade-off:** zero data retention means the provider shouldn't keep or train on the text, but your friends' messages still leave the server to OpenRouter and its provider for processing.
 
+### Memory: keeping the Private/People notes up to date
+A background job turns your personal chats into the hidden `Private/People/<Name>.md` notes (snapshot, how you talk, open loops, key moments, facts), so your second brain follows your conversations.
+- **When:** every night at `MEMORY_TIME` (default 03:00 local), or `/memory run` to start it now, `/memory` for status. It is quiet unless something needs attention.
+- **Older history:** put a read-only (viewer) OpenWA key for the personal session in `.env` as `OPENWA_PERSONAL_KEY` (never paste it in chat). The job fetches old 1:1 history a few chats per night (`MEMORY_BACKFILL_CHATS`, default 15; `MEMORY_BACKFILL_MESSAGES`, default 500 newest per chat). It only makes GET requests. Old history never shows up in `/inbox`.
+- **What it does with a chat:** finds the person's note by phone number (or creates one), sends the existing note plus the new messages to the zero-data-retention model with no tools, and writes back the merged note. Your own hand-written text and the `relationship:` line are kept. Incomplete or much-shorter model answers are rejected and retried the next night. Automated or business chats are skipped. Groups are not turned into notes.
+- **Cost control:** a chat is processed only when it has at least `MEMORY_MIN_MESSAGES` (default 5) new messages, or its oldest has waited 3 days. Each night stops at `MEMORY_NIGHTLY_CHARS` (default 600000 characters, about 150k input tokens) and at the daily spend limit, and resumes the next night. Expect cents per month once the first backfill is done.
+- **Retention:** raw messages are deleted `INBOX_RETENTION_DAYS` (30) after being folded into a note; never-processed ones after 180 days. To record your own replies for new messages too, add the `message.sent` event to the personal-session webhook.
+
 ## Private notes
 Anything under the vault's top-level `Private/` folder is hidden from the AI (search, read_note, embeddings, find_contact). Chat-derived summaries live in `Private/People`; see `scripts/CHAT_IMPORT.md`. `/graph` and Obsidian still show them.
 

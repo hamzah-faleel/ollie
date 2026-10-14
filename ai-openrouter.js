@@ -34,7 +34,7 @@ async function complete(state, tools) {
           model,
           messages: state.messages,
           ...(tools ? { tools: tools.openaiTools() } : {}),
-          max_tokens: 2048, // no temperature: GPT-6 Luna endpoints don't support it, and require_parameters then finds no endpoint (404)
+          max_tokens: state.maxTokens || 2048, // no temperature: GPT-6 Luna endpoints don't support it, and require_parameters then finds no endpoint (404)
           provider: PRIVACY,
           usage: { include: true },
         }),
@@ -85,8 +85,8 @@ module.exports = {
   name: 'openrouter',
   // One tool-less request for text we do not trust (other people's messages). Same privacy routing as every request,
   // and no tools are sent, so nothing in the text can make the bot do anything.
-  async plain(system, user) {
-    const state = { messages: [{ role: 'system', content: system }, { role: 'user', content: user }], models: await modelList(), modelIdx: 0 };
+  async plain(system, user, maxTokens) {
+    const state = { messages: [{ role: 'system', content: system }, { role: 'user', content: user }], models: await modelList(), modelIdx: 0, maxTokens };
     return String((await complete(state, null)).content || '').trim();
   },
   async start(systemPrompt, history, media) {

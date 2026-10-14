@@ -40,9 +40,9 @@ async function run(systemPrompt, history, ctx, media) {
 }
 
 // Summarize text from other people with no tools, only via OpenRouter's zero-data-retention routing. Fails closed otherwise.
-async function untrusted(system, user) {
+async function untrusted(system, user, maxTokens) {
   if (typeof provider.plain !== 'function') throw new Error('Inbox processing needs AI_PROVIDER=openrouter (zero-data-retention routing).');
-  return turnStore.run(crypto.randomUUID(), () => provider.plain(system, user));
+  return turnStore.run(crypto.randomUUID(), () => provider.plain(system, user, maxTokens));
 }
 
 module.exports = { reply, untrusted, QuotaError, BusyError, CreditError, bus, providerName: provider.name };
