@@ -350,6 +350,7 @@ async function handle(event) {
   }
 
   db.setKv('owner_target', JSON.stringify({ sessionId, chatId: msg.chatId })); // where scheduled messages go
+  db.setKv('last_owner_msg_at', Date.now());                                    // shown on the server dashboard
 
   let text = (msg.body || '').trim();
   let viaVoice = false;
