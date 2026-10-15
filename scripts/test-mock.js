@@ -49,12 +49,17 @@ const CHATS = [
   { id: '94711110015@c.us', name: 'Test Henry', kind: 'individual' },
 ];
 const HISTORY = { '94711110010@c.us': hist(1, 6), '777000111@lid': hist(2, 4), '94711110012@c.us': hist(3, 4), '94711110013@c.us': hist(4, 4), '94711110014@c.us': hist(5, 2), '94711110015@c.us': hist(9, 3, true) };
+let failList = false;       // true: the personal session's chat list answers "Session is not started"
 const owGets = [];          // [method, url, x-api-key] for requests under the personal session
 const owSrv = http.createServer(async (req, res) => {
   const b = await body(req);
   owCalls.push(`${req.method} ${req.url}`);
   if (req.url.includes('/personal-1')) owGets.push([req.method, req.url, req.headers['x-api-key']]);
   if (req.url.endsWith('/send-text')) sent.push(JSON.parse(b).text);
+  if (failList && req.method === 'GET' && /\/sessions\/personal-1\/chats/.test(req.url)) { // what OpenWA says when the session is down
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({ message: 'Session is not started', error: 'Bad Request', statusCode: 400 }));
+  }
   res.writeHead(200, { 'Content-Type': 'application/json' });
   let out = {};
   if (req.method === 'GET' && /\/sessions\/personal-1\/chats/.test(req.url)) out = CHATS;
@@ -245,6 +250,10 @@ const check = (name, ok, info = '') => { console.log(`${ok ? 'PASS' : 'FAIL'}  $
     const base = existing === '(none yet)' ? `# ${name}\n## Snapshot\nMock summary.\n## How we talk\nx\n## Open loops\n- none\n## Key moments\n- first\n## Facts\nnone` : existing;
     return text(`${base}\n- mock added a key moment`);
   };
+  failList = true; reset(); await say(botPort, '/memory run');
+  check('personal session down: owner gets a clear message, not "see logs"', await until(() => sent.some((x) => /Memory run done/.test(x) && /personal WhatsApp session isn't running/.test(x) && !/see logs/.test(x)), 20000), JSON.stringify(sent));
+  check('nothing was fetched or stored while the session was down', db.prepare("SELECT COUNT(*) n FROM memory_chats").get().n === 0);
+  failList = false;
   reset(); await say(botPort, '/memory run');
   check('/memory run starts in the background', await until(() => sent.some((x) => /^Started/.test(x))), JSON.stringify(sent));
   check('memory run reports when done', await until(() => sent.some((x) => /Memory run done/.test(x)), 20000), JSON.stringify(sent));

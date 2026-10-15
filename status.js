@@ -69,7 +69,8 @@ section('memory', () => {
     waitingMessages: waiting, backfill: { done: chats.done || 0, pending: chats.pending || 0, skipped: chats.skip || 0 },
     privateNotes: notes, newestNoteAt: newest || null, lastRunDay: kv('last_memory_day'),
     lastRun: last && { at: last.at, created: last.created, updated: last.updated, rows: last.rows, backfilled: last.backfilled, errors: last.errors, rejected: last.rejected,
-      budgetStop: last.budgetStop, limitStop: last.limitStop, creditStop: last.creditStop, left: last.left, pending: last.pending },
+      budgetStop: last.budgetStop, limitStop: last.limitStop, creditStop: last.creditStop, left: last.left, pending: last.pending,
+      historyError: last.backfillError ? String(last.backfillError).slice(0, 140) : null },
   };
 });
 

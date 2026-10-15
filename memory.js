@@ -230,7 +230,10 @@ const describe = (r) => r.disabled || (r.already ? 'A memory run is already in p
   + (r.budgetStop ? ' Stopped at tonight\'s budget; the rest continues next run.' : '')
   + (r.limitStop ? ' Stopped: daily AI spend limit reached.' : '') + (r.creditStop ? ' Stopped: AI credit ran out.' : '')
   + (r.rejected ? ` ${r.rejected} model answer${r.rejected === 1 ? ' was' : 's were'} rejected as incomplete and will be retried.` : '')
-  + (r.errors ? ` ${r.errors} error${r.errors === 1 ? '' : 's'} (see logs).` : ''));
+  + (r.backfillError ? (/not started|not ready/i.test(r.backfillError)
+    ? " Older history couldn't be fetched because your personal WhatsApp session isn't running. Start it (dashboard > WhatsApp > Start); I'll retry every 30 minutes this morning."
+    : ` Older history couldn't be fetched: ${String(r.backfillError).slice(0, 100)}.`) : '')
+  + (r.errors && !r.backfillError ? ` ${r.errors} error${r.errors === 1 ? '' : 's'} (see logs).` : ''));
 
 function status() {
   const last = JSON.parse(db.getKv('memory_last_run') || 'null');
@@ -253,11 +256,17 @@ async function tick(notify) {
   const [h, m] = now.toLocaleTimeString('en-GB', { timeZone: TZ, hour12: false, hour: '2-digit', minute: '2-digit' }).split(':').map(Number);
   const since = h * 60 + m - (Number(match[1]) * 60 + Number(match[2]));
   if (since < 0 || since > 180 || db.getKv('last_memory_day') === day || running) return;
-  db.setKv('last_memory_day', day);
+  if (Date.now() - Number(db.getKv('memory_try_at') || 0) < 30 * 60_000) return; // retry every 30 min inside the window
+  db.setKv('memory_try_at', Date.now());
   try {
     const r = await run();
     console.log(`[memory] ${describe(r)}`);
-    if (notify && (r.creditStop || r.errors)) await notify(describe(r)); // quiet unless something needs attention
+    // A failed history fetch (e.g. the personal session is down) or empty credit is retried until the window closes.
+    if (!r.backfillError && !r.creditStop) db.setKv('last_memory_day', day);
+    if (notify && (r.creditStop || r.errors) && db.getKv('memory_notified_day') !== day) { // quiet unless needed, once a day
+      db.setKv('memory_notified_day', day);
+      await notify(describe(r));
+    }
   } catch (e) { console.error('[memory]', e.message); }
 }
 

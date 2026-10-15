@@ -100,7 +100,7 @@ Anything under the vault's top-level `Private/` folder is hidden from the AI (se
 1. This folder lives at `~/OpenWA/wa-bot`; `docker-compose.override.yml` goes in `~/OpenWA/`.
 2. `cp wa-bot/.env.example wa-bot/.env` and fill it in.
 3. `~/OpenWA/.env` needs `SSRF_ALLOWED_HOSTS=wa-bot` and `RESOLVE_LID_TO_PHONE=true`.
-4. `cd ~/OpenWA && docker compose up -d --build` (rebuilding can restart `openwa-api` and leave the bot's WhatsApp session `disconnected`; check `GET /api/sessions/<id>` and `POST /api/sessions/<id>/start` if it does)
+4. `cd ~/OpenWA && docker compose up -d --build` the first time. To redeploy only the bot use `docker compose up -d --build --no-deps wa-bot`: without `--no-deps`, OpenWA restarts too and both WhatsApp sessions (the bot's and your personal one) drop; start them again from the dashboard WhatsApp tab
 5. Register the webhook once (see earlier instructions). Logs: `docker logs -f wa-bot`
 
 ## Obsidian sync (optional)

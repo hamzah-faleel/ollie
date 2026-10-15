@@ -49,10 +49,10 @@ WhatsApp → OpenWA (self-hosted gateway, separate container `openwa-api`) → w
 - OpenWA API docs: https://github.com/rmyndharis/OpenWA/blob/main/docs/06-api-specification.md (webhooks §6.6)
 
 ## Commands
-- Rebuild + restart: `cd ~/OpenWA && docker compose up -d --build wa-bot`
+- Rebuild + restart: `cd ~/OpenWA && docker compose up -d --build --no-deps wa-bot` (`--no-deps` keeps `openwa-api` running; without it OpenWA restarts and BOTH sessions, the bot's and the personal one, drop; on 2026-10-14 that cost ~25h of inbox messages and the 03:00 memory run)
 - Logs: `docker logs -f wa-bot`
 - Mock tests: `docker run --rm -v "$PWD":/app -w /app node:22-alpine node --disable-warning=ExperimentalWarning scripts/test-mock.js`
-- After a rebuild check the bot's OpenWA session and `POST /api/sessions/<id>/start` if `disconnected`
+- After any restart of `openwa-api` check BOTH sessions: the bot's (`POST /api/sessions/<id>/start` with the bot key) and the personal one (needs an operator key, e.g. dashboard > WhatsApp > Start)
 - Syntax check (no node on host): `docker run --rm -v "$PWD":/app -w /app node:22-alpine sh -c 'for f in *.js scripts/*.js; do node --check $f; done'`
 - Secrets live in `.env` (never commit it).
 
