@@ -82,6 +82,10 @@ The bot can read new messages from your personal WhatsApp (everyone, groups incl
   To stop: delete that webhook (`DELETE .../webhooks/<id>`) and run `/inbox clear`.
 - **Know the trade-off:** zero data retention means the provider shouldn't keep or train on the text, but your friends' messages still leave the server to OpenRouter and its provider for processing.
 
+### Waiting for your reply, and forwarding replies to you (no AI)
+- `/pending` lists chats where the newest message is theirs and you haven't answered (default: waiting 30+ minutes, last 7 days). The morning briefing includes a short "Waiting for your reply" section. It only knows you answered if the personal-session webhook also sends `message.sent`: update it with `curl -X PUT http://127.0.0.1:2785/api/sessions/<personal session id>/webhooks/<webhook id> -H "X-API-Key: <key>" -H "Content-Type: application/json" -d '{"events":["message.received","message.sent"]}'`.
+- Messages sent to the **bot's own number** by other people (for example replies to a message the bot sent for you) are stored and forwarded to you as `↩️ Name (+number): text`. `/forward replies` (default) relays only people the bot has messaged for you, `/forward all` relays every direct message, `/forward off` only stores them. At most 10 forwards per person and 60 overall per hour (`FORWARD_PER_SENDER_HOUR`, `FORWARD_TOTAL_HOUR`), with a single "holding back" notice. The bot never answers these people on its own.
+
 ### Memory: keeping the Private/People notes up to date
 A background job turns your personal chats into the hidden `Private/People/<Name>.md` notes (snapshot, how you talk, open loops, key moments, facts), so your second brain follows your conversations.
 - **When:** every night at `MEMORY_TIME` (default 03:00 local), or `/memory run` to start it now, `/memory` for status. It is quiet unless something needs attention.

@@ -18,6 +18,7 @@ let script = [];            // queued OpenRouter responses: { status, json }
 let dynamic = null;         // optional function(request) -> response, used for the memory-note calls
 const orRequests = [];      // what the bot sent to OpenRouter
 const sent = [];            // what the bot sent to WhatsApp
+const sentTo = [];          // the chat id each of those went to
 const MODELS = { data: [
   { id: 'main/model', pricing: { prompt: '0.000002', completion: '0.00001' }, supported_parameters: ['tools'] },
   { id: 'fallback/model', pricing: { prompt: '0.0000001', completion: '0.0000005' }, supported_parameters: ['tools'] },
@@ -55,7 +56,7 @@ const owSrv = http.createServer(async (req, res) => {
   const b = await body(req);
   owCalls.push(`${req.method} ${req.url}`);
   if (req.url.includes('/personal-1')) owGets.push([req.method, req.url, req.headers['x-api-key']]);
-  if (req.url.endsWith('/send-text')) sent.push(JSON.parse(b).text);
+  if (req.url.endsWith('/send-text')) { const j = JSON.parse(b); sent.push(j.text); sentTo.push(j.chatId); }
   if (failList && req.method === 'GET' && /\/sessions\/personal-1\/chats/.test(req.url)) { // what OpenWA says when the session is down
     res.writeHead(400, { 'Content-Type': 'application/json' });
     return res.end(JSON.stringify({ message: 'Session is not started', error: 'Bad Request', statusCode: 400 }));
@@ -78,9 +79,15 @@ async function say(botPort, msg) {
   const sig = 'sha256=' + crypto.createHmac('sha256', SECRET).update(raw).digest('hex');
   await fetch(`http://127.0.0.1:${botPort}/webhook`, { method: 'POST', headers: { 'X-OpenWA-Signature': sig, 'X-OpenWA-Idempotency-Key': `k${n}` }, body: raw });
 }
+// A direct message reaching the BOT's number from someone who is not the owner (synthetic data only).
+async function toBot(botPort, from, msg, extra = {}) {
+  const raw = JSON.stringify({ event: 'message.received', sessionId: SESSION, data: { id: extra.id || `b${++n}`, chatId: `${from}@c.us`, from: `${from}@c.us`, body: msg, type: 'text', kind: 'individual', isGroup: false, fromMe: false, ...extra } });
+  const sig = 'sha256=' + crypto.createHmac('sha256', SECRET).update(raw).digest('hex');
+  await fetch(`http://127.0.0.1:${botPort}/webhook`, { method: 'POST', headers: { 'X-OpenWA-Signature': sig, 'X-OpenWA-Idempotency-Key': `kb${++n}` }, body: raw });
+}
 // A message arriving on the owner's PERSONAL session (synthetic data only).
 async function personal(botPort, from, msg, extra = {}) {
-  const raw = JSON.stringify({ event: 'message.received', sessionId: 'personal-1', data: { id: `p${++n}`, chatId: `${from}@c.us`, from: `${from}@c.us`, body: msg, type: 'text', kind: 'individual', isGroup: false, fromMe: false, contact: { name: extra.name }, ...extra } });
+  const raw = JSON.stringify({ event: extra.event || 'message.received', sessionId: 'personal-1', data: { id: `p${++n}`, chatId: `${from}@c.us`, from: `${from}@c.us`, body: msg, type: 'text', kind: 'individual', isGroup: false, fromMe: false, contact: { name: extra.name }, ...extra } });
   const sig = 'sha256=' + crypto.createHmac('sha256', SECRET).update(raw).digest('hex');
   await fetch(`http://127.0.0.1:${botPort}/webhook`, { method: 'POST', headers: { 'X-OpenWA-Signature': sig, 'X-OpenWA-Idempotency-Key': `k${n}` }, body: raw });
 }
@@ -112,7 +119,7 @@ const check = (name, ok, info = '') => { console.log(`${ok ? 'PASS' : 'FAIL'}  $
   fs.writeFileSync(daveFile, '---\nprivate: true\nphone: +94722220002\nrelationship: friend\nlast_contact: 2026-01-01\n---\n# Dave\n## Snapshot\nHand-written: likes cricket.\n## Open loops\n- none\n## Key moments\n- met in 2020\n');
   let bot = await startBot();
 
-  const reset = () => { sent.length = 0; orRequests.length = 0; };
+  const reset = () => { sent.length = 0; sentTo.length = 0; orRequests.length = 0; };
 
   // 1. plain reply
   reset(); script = [text('Hello there', 0.0001)];
@@ -277,6 +284,44 @@ const check = (name, ok, info = '') => { console.log(`${ok ? 'PASS' : 'FAIL'}  $
   reset(); await say(botPort, '/memory');
   check('/memory shows status', await until(() => /\*Memory\*/.test(lastSent()) && /Last run/.test(lastSent())), lastSent());
   dynamic = null;
+
+  // ---- Second inbox: messages to the bot's own number are relayed to the owner, no AI, no answer back ----
+  db.prepare("INSERT INTO outbox (owner_chat, session_id, to_name, to_chat, text, status, created_at, sent_at) VALUES ('o', 's', 'Test Sam', '94733330001@c.us', 'hi', 'sent', ?, ?)").run(Date.now(), Date.now());
+  reset(); await toBot(botPort, '94733330001', 'Yes, I can come on Friday', { contact: { name: 'Test Sam' } });
+  check('reply from someone the bot messaged is forwarded to the owner', await until(() => sent.some((x) => /^↩️ \*Test Sam\* \(\+94733330001\):\nYes, I can come on Friday/.test(x))), JSON.stringify(sent));
+  check('forwarded to the owner only, never answered back to the sender', sentTo.length === 1 && sentTo[0] === `${OWNER}@c.us`, JSON.stringify(sentTo));
+  check('forwarding makes no AI call', orRequests.length === 0);
+  check('the message is stored in the inbox as source "bot", already seen', db.prepare("SELECT COUNT(*) n FROM inbox_messages WHERE source = 'bot' AND chat_id = '94733330001@c.us' AND seen = 1").get().n === 1);
+  reset(); await toBot(botPort, '94733330002', 'Hello, is this the right number?', { contact: { name: 'Test Stranger' } }); await sleep(500);
+  check('default mode "replies": a stranger is stored but not forwarded', sent.length === 0 && db.prepare("SELECT COUNT(*) n FROM inbox_messages WHERE chat_id = '94733330002@c.us'").get().n === 1, JSON.stringify(sent));
+  reset(); await say(botPort, '/forward all');
+  check('/forward all switches mode', await until(() => /Mode: \*all\*/.test(lastSent())), lastSent());
+  reset(); await toBot(botPort, '94733330002', 'Second message from the stranger', { contact: { name: 'Test Stranger' } });
+  check('mode all: the stranger is now forwarded', await until(() => sent.some((x) => /Test Stranger/.test(x) && /Second message/.test(x))), JSON.stringify(sent));
+  reset(); await toBot(botPort, '94733330002', 'Second message from the stranger', { id: 'dup-1', contact: { name: 'Test Stranger' } }); await toBot(botPort, '94733330002', 'Second message from the stranger', { id: 'dup-1', contact: { name: 'Test Stranger' } });
+  await sleep(600);
+  check('a duplicate delivery of the same message is forwarded once', sent.filter((x) => /Second message/.test(x)).length === 1, JSON.stringify(sent));
+  reset(); for (let i = 0; i < 13; i++) await toBot(botPort, '94733330003', `flood message ${i}`, { contact: { name: 'Test Flooder' } });
+  await sleep(1200);
+  check('rate limit: at most 10 per person per hour, then one heads-up', sent.filter((x) => /^↩️/.test(x)).length === 10 && sent.filter((x) => /Holding back messages from Test Flooder/.test(x)).length === 1, `${sent.filter((x) => /^↩️/.test(x)).length} forwarded, ${sent.length} total`);
+  check('flood messages beyond the limit are still stored', db.prepare("SELECT COUNT(*) n FROM inbox_messages WHERE chat_id = '94733330003@c.us'").get().n === 13);
+  reset(); await say(botPort, '/forward off'); await until(() => /Mode: \*off\*/.test(lastSent()));
+  reset(); await toBot(botPort, '94733330001', 'Another reply while forwarding is off'); await sleep(500);
+  check('mode off: stored, nothing forwarded', sent.length === 0 && db.prepare("SELECT COUNT(*) n FROM inbox_messages WHERE text LIKE 'Another reply%'").get().n === 1);
+  reset(); await say(botPort, '/forward bogus');
+  check('unknown /forward mode is rejected', await until(() => /Unknown mode/.test(lastSent())), lastSent());
+  reset(); await say(botPort, '/forward replies'); await until(() => /Mode: \*replies\*/.test(lastSent()));
+
+  // ---- /pending: chats waiting for the owner's reply (stored data only) ----
+  const twoHoursAgo = Math.floor(Date.now() / 1000) - 7200;
+  reset(); await personal(botPort, '94711110021', 'are you coming tonight?', { name: 'Test Pat', timestamp: twoHoursAgo });
+  await sleep(300); await say(botPort, '/pending');
+  check('/pending lists a chat nobody has answered, with the wait time', await until(() => /Waiting for your reply/.test(lastSent()) && /Test Pat: waiting 2h - "are you coming tonight\?"/.test(lastSent())), lastSent());
+  check('/pending warns when it has never seen your own replies', /message\.sent/.test(lastSent()), lastSent());
+  reset(); await personal(botPort, '94711110021', 'yes on my way', { event: 'message.sent', fromMe: true, name: 'Test Pat', timestamp: Math.floor(Date.now() / 1000) });
+  await sleep(300); await say(botPort, '/pending');
+  check('after the owner replies (message.sent) the chat is no longer pending', await until(() => /Nobody is waiting|Waiting for your reply/.test(lastSent())) && !/Test Pat/.test(lastSent()), lastSent());
+  check('an outgoing reply is stored as the owner\'s, not as a new inbound message', db.prepare("SELECT COUNT(*) n FROM inbox_messages WHERE from_me = 1 AND text = 'yes on my way' AND seen = 1").get().n === 1);
 
   bot.kill();
   orSrv.close(); owSrv.close();

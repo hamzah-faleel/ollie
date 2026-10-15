@@ -27,7 +27,7 @@ db.exec(`
 `);
 // Columns added later (older databases get them here).
 const have = db.prepare('PRAGMA table_info(inbox_messages)').all().map((c) => c.name);
-for (const [col, def] of [['from_me', 'INTEGER NOT NULL DEFAULT 0'], ['consolidated', 'INTEGER NOT NULL DEFAULT 0'], ['phone', 'TEXT'], ['stored_at', 'INTEGER NOT NULL DEFAULT 0']]) {
+for (const [col, def] of [['from_me', 'INTEGER NOT NULL DEFAULT 0'], ['consolidated', 'INTEGER NOT NULL DEFAULT 0'], ['phone', 'TEXT'], ['stored_at', 'INTEGER NOT NULL DEFAULT 0'], ['source', "TEXT NOT NULL DEFAULT 'personal'"]]) {
   if (!have.includes(col)) db.exec(`ALTER TABLE inbox_messages ADD COLUMN ${col} ${def}`);
 }
 db.exec('UPDATE inbox_messages SET stored_at = ts WHERE stored_at = 0');
@@ -41,10 +41,53 @@ const digits = (s) => String(s || '').replace(/\D/g, '');
 
 // One row. `seen`/`consolidated` default to 0 (new); history backfill passes seen = 1 so old chats never flood /inbox.
 const insertStmt = db.prepare(`INSERT OR IGNORE INTO inbox_messages
-  (msg_id, chat_id, chat_name, sender, is_group, ts, type, text, seen, from_me, phone, stored_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+  (msg_id, chat_id, chat_name, sender, is_group, ts, type, text, seen, from_me, phone, stored_at, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
 function insertRaw(r) {
-  insertStmt.run(String(r.msg_id), String(r.chat_id), String(r.chat_name), String(r.sender), r.is_group ? 1 : 0, r.ts, String(r.type || 'text'),
-    redact(r.text).slice(0, 2000), r.seen ? 1 : 0, r.from_me ? 1 : 0, r.phone || null, Date.now());
+  return insertStmt.run(String(r.msg_id), String(r.chat_id), String(r.chat_name), String(r.sender), r.is_group ? 1 : 0, r.ts, String(r.type || 'text'),
+    redact(r.text).slice(0, 2000), r.seen ? 1 : 0, r.from_me ? 1 : 0, r.phone || null, Date.now(), r.source || 'personal');
+}
+
+// A direct message that reached the BOT's own number from someone other than the owner (second inbox).
+// Stored as already seen (the owner gets it forwarded instead), so it joins the memory without repeating in /inbox.
+function ingestBot(m) {
+  if (m.fromMe || m.isGroup || m.kind !== 'individual' || ['masked', 'revoked', 'call'].includes(m.type)) return null;
+  const body = String(m.body || '').trim();
+  const phone = digits(m.senderPhone) || (/@(c\.us|s\.whatsapp\.net)$/.test(String(m.chatId)) ? digits(String(m.chatId).split('@')[0]) : '');
+  const name = m.contact?.name || m.contact?.pushName || (phone ? `+${phone}` : String(m.from || 'unknown').split('@')[0]);
+  const raw = Number(m.timestamp);
+  const ts = raw ? (raw < 1e12 ? raw * 1000 : raw) : Date.now();
+  const res = insertRaw({ msg_id: m.id || `bot-${ts}-${Math.random()}`, chat_id: m.chatId, chat_name: name, sender: name, is_group: false, ts, type: m.type,
+    text: body || `[${m.type || 'message'}]`, seen: true, from_me: false, phone, source: 'bot' });
+  if (!res.changes) return null; // already stored (duplicate delivery)
+  return { name, phone, text: body || `[${m.type || 'message'}]`, type: m.type || 'text' };
+}
+
+// Chats where the newest message is from them and the owner has not answered, oldest wait first. No AI involved.
+// Only as good as the data: owner replies appear only if the personal webhook also sends message.sent (or history was fetched).
+function pending(minMinutes = Number(process.env.PENDING_MIN_MINUTES || 30), days = 7) {
+  const now = Date.now();
+  const rows = db.prepare('SELECT chat_id, chat_name, from_me, ts, text FROM inbox_messages WHERE ts > ? AND is_group = 0 ORDER BY ts').all(now - days * 86_400_000);
+  const byChat = new Map();
+  for (const r of rows) (byChat.get(r.chat_id) || byChat.set(r.chat_id, []).get(r.chat_id)).push(r);
+  const out = [];
+  for (const list of byChat.values()) {
+    const last = list[list.length - 1];
+    if (last.from_me || now - last.ts < minMinutes * 60_000) continue;
+    let n = 0;
+    for (let i = list.length - 1; i >= 0 && !list[i].from_me; i--) n++;
+    out.push({ name: last.chat_name, count: n, since: list[list.length - n].ts, preview: last.text.replace(/\s+/g, ' ').slice(0, 60) });
+  }
+  const sawOwnReplies = (db.prepare('SELECT COUNT(*) n FROM inbox_messages WHERE from_me = 1 AND ts > ?').get(now - days * 86_400_000).n || 0) > 0;
+  return { items: out.sort((a, b) => a.since - b.since), sawOwnReplies };
+}
+
+const waited = (since) => { const m = Math.max(1, Math.round((Date.now() - since) / 60_000)); return m < 60 ? `${m}m` : m < 1440 ? `${Math.round(m / 60)}h` : `${Math.round(m / 1440)}d`; };
+function pendingText(limit = 15) {
+  const { items, sawOwnReplies } = pending();
+  if (!items.length) return 'Nobody is waiting on a reply from you.' + (sawOwnReplies ? '' : '\n(I can only see your replies if the personal webhook also sends message.sent.)');
+  return `*Waiting for your reply* (${items.length})\n` + items.slice(0, limit).map((i) => `- ${i.name}: ${i.count > 1 ? i.count + ' messages, ' : ''}waiting ${waited(i.since)}${i.preview ? ` - "${i.preview}"` : ''}`).join('\n')
+    + (items.length > limit ? `\n...and ${items.length - limit} more` : '')
+    + (sawOwnReplies ? '' : '\n\n(Heads up: I have not seen any replies you sent, so this may include chats you already answered. Add message.sent to the personal webhook.)');
 }
 
 function ingest(event) {
@@ -138,4 +181,4 @@ function clear() {
   return `Deleted ${n} stored message${n === 1 ? '' : 's'}.`;
 }
 
-module.exports = { ingest, insertRaw, purge, digest, about, status, clear, redact, digits };
+module.exports = { ingest, ingestBot, pending, pendingText, insertRaw, purge, digest, about, status, clear, redact, digits };

@@ -84,6 +84,10 @@ async function createDraft({ to, text }, ctx) {
   return { ok: true, status: 'draft_awaiting_owner_confirmation', to: String(to).trim(), note: 'NOT sent. The system shows the owner the draft and sends only after they reply yes. Do not say it was sent.' };
 }
 
+// Has the bot ever sent (with the owner's yes) a message to this phone number? Used to recognise replies.
+const hasSentTo = (phoneDigits) => Boolean(phoneDigits)
+  && Boolean(db.prepare("SELECT 1 FROM outbox WHERE status = 'sent' AND to_chat = ? LIMIT 1").get(`${String(phoneDigits).replace(/\D/g, '')}@c.us`));
+
 function pendingDraft(ownerChat) {
   const d = db.prepare("SELECT * FROM outbox WHERE owner_chat = ? AND status = 'draft' ORDER BY id DESC LIMIT 1").get(ownerChat);
   if (!d) return null;
@@ -123,4 +127,4 @@ function cancel(ownerChat) {
   return `Cancelled. Nothing was sent to ${d.to_name}.`;
 }
 
-module.exports = { createDraft, pendingDraft, draftPreview, confirm, cancel };
+module.exports = { createDraft, hasSentTo, pendingDraft, draftPreview, confirm, cancel };

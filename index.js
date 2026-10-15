@@ -46,6 +46,7 @@ const usage = require('./usage');
 const models = require('./models');
 const inbox = require('./inbox');
 const memory = require('./memory');
+const forward = require('./forward');
 const { fmt } = require('./tools');
 
 async function systemPrompt() {
@@ -176,6 +177,8 @@ const HELP = `*What I can do*
 /graph - an interactive map of your notes (HTML file)
 /briefing - send the morning briefing now
 /inbox - summary of new messages from your personal WhatsApp (/inbox <name>, /inbox status, /inbox clear)
+/pending - chats waiting for your reply (from your stored messages, no AI)
+/forward - relay messages sent to my number straight to you (/forward replies|all|off)
 /memory - status of the nightly update of your private People notes (/memory run to do it now)
 /usage - AI messages, tokens and cost (today, week, month)
 /model - show or switch the AI model (/model <slug>, /model reset)
@@ -229,7 +232,7 @@ async function birthdaysText() {
 }
 
 async function briefingText(chatId) {
-  const [wx, mail, due, bdays] = await Promise.all([
+  const [wx, mail, due, bdays, waiting] = await Promise.all([
     section('Weather', async () => `- ${await weather.briefingLine()}`),
     gmail.enabled() ? section('Unread email (last 24h)', async () => {
       const m = await gmail.unreadDigest(5);
@@ -237,8 +240,12 @@ async function briefingText(chatId) {
     }) : '',
     section('To do', () => tasksText()),
     section('Birthdays', birthdaysText),
+    cfg.personalSession ? section('Waiting for your reply', () => { // from stored messages, no AI; only shown when someone is waiting
+      const { items } = inbox.pending();
+      return items.length ? items.slice(0, 5).map((i) => `- ${i.name}${i.count > 1 ? ` (${i.count})` : ''}`).join('\n') + (items.length > 5 ? `\n- ...and ${items.length - 5} more (/pending)` : '') : null;
+    }) : '',
   ]);
-  return `Good morning ☀️${wx}\n\n${await todayText(chatId)}${due}${bdays}${mail}`;
+  return `Good morning ☀️${wx}\n\n${await todayText(chatId)}${due}${bdays}${waiting}${mail}`;
 }
 
 async function handleCommand(cmd, sessionId, chatId, args = '') {
@@ -275,6 +282,12 @@ async function handleCommand(cmd, sessionId, chatId, args = '') {
       out = e instanceof ai.CreditError ? 'The AI is unavailable right now: its credit ran out.' : `I couldn't summarize the inbox just now (${e.message.slice(0, 120)}). Nothing was lost; try again in a minute.`;
     }
     return sendText(sessionId, chatId, out); // sent directly, not saved to chat memory, so the tool-enabled assistant never sees it
+  }
+  if (cmd === '/pending') return sendText(sessionId, chatId, inbox.pendingText());
+  if (cmd === '/forward') {
+    const arg = args.trim().toLowerCase();
+    if (arg && !forward.setMode(arg)) return sendText(sessionId, chatId, `Unknown mode "${arg}". Use /forward replies, /forward all or /forward off.`);
+    return sendText(sessionId, chatId, forward.describe());
   }
   if (cmd === '/memory') {
     if (!cfg.personalSession) return sendText(sessionId, chatId, 'The personal inbox is not set up (PERSONAL_SESSION_ID is empty).');
@@ -334,7 +347,9 @@ ai.bus.on('spend-limit', async ({ spent, limit, model }) => {
 });
 
 async function handle(event) {
-  if (event.event !== 'message.received') return;
+  // Only incoming messages are handled, plus the owner's OWN outgoing messages on the personal session (stored so /pending knows what was answered).
+  const ownSent = event.event === 'message.sent' && cfg.personalSession && event.sessionId === cfg.personalSession;
+  if (event.event !== 'message.received' && !ownSent) return;
   const msg = event.data || {};
   const sessionId = event.sessionId;
   if (cfg.personalSession && sessionId === cfg.personalSession) { // other people's messages: store only, never answer or act
@@ -345,6 +360,12 @@ async function handle(event) {
   if (msg.fromMe || msg.isGroup || msg.kind !== 'individual') return;
 
   if (!isOwner(msg)) {
+    // Someone else wrote to the bot's number: store it and (per /forward) relay it to the owner. No AI, and no answer goes back to them.
+    const relayed = await forward.handle(msg, async (t) => {
+      const target = JSON.parse(db.getKv('owner_target') || 'null');
+      if (target) await sendText(target.sessionId, target.chatId, t);
+    }).catch((e) => { console.warn('[forward]', e.message); return false; });
+    if (relayed) return;
     console.log(`Ignored message from ${msg.from} (senderPhone=${msg.senderPhone ?? 'n/a'}). Add your number to OWNER_NUMBERS if this is you.`);
     return;
   }
