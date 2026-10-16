@@ -436,6 +436,17 @@ const check = (name, ok, info = '') => { console.log(`${ok ? 'PASS' : 'FAIL'}  $
   reset(); await say(botPort, '/watch now'); await sleep(300); await say(botPort, '/alerts');
   check('a VIP chat unread for hours raises a gentle (non-urgent) alert', await until(() => /Test Vip.*VIP.*1 unread message/.test(lastSent())) && !/482913/.test(lastSent()), lastSent());
   check('unread detection only ever made GET requests to the personal session', owGets.length > 0 && owGets.every(([m]) => m === 'GET'), JSON.stringify(owGets.filter(([m]) => m !== 'GET')));
+  {
+    const unreadMod = require('../unread'), inboxB = require('../inbox');
+    const chatsB = [{ id: '94700000099@c.us', name: 'Test Bot', unreadCount: 4, timestamp: Math.floor(Date.now() / 1000) - 7200, lastMessage: 'Your wrap-up' },
+      { id: '94700000098@c.us', name: 'Test Human', unreadCount: 1, timestamp: Math.floor(Date.now() / 1000) - 7200, lastMessage: 'hi' }];
+    check('the bot\'s own chat is left out of the unread list', unreadMod.parse(chatsB, { exclude: '94700000099' }).map((u) => u.name).join() === 'Test Human');
+    check('without a bot number nothing is excluded', unreadMod.parse(chatsB).length === 2);
+    inboxB.setBotPhone('94700000099');
+    inboxB.insertRaw({ msg_id: 'bot-own-1', chat_id: '94700000099@c.us', chat_name: 'Test Bot', sender: 'Test Bot', is_group: 0, ts: Date.now() - 3 * 3600_000, type: 'chat', text: 'Good evening, here is your wrap-up. Anything to add?', seen: 0, from_me: 0, phone: '94700000099' });
+    check('the bot\'s own chat never shows as waiting for your reply', !inboxB.pending(1).items.some((i) => /Test Bot/.test(i.name)));
+    inboxB.setBotPhone('');
+  }
   unreadOn = false;
   reset(); await say(botPort, '/help');
   check('/help lists /unread', await until(() => /\/unread/.test(lastSent())), lastSent());

@@ -30,9 +30,10 @@ async function fetchChats() {
 }
 
 // Pure: a ChatSummary[] -> the unread list, oldest first. `incoming(chatId, n)` may supply stored incoming timestamps to age the oldest unread message.
-function parse(chats, { incoming = () => [], isVip = () => false } = {}) {
+function parse(chats, { incoming = () => [], isVip = () => false, exclude = '' } = {}) {
   const out = [];
   for (const c of chats || []) {
+    if (exclude && /@(c\.us|s\.whatsapp\.net)$/.test(String(c.id)) && digits(String(c.id).split('@')[0]) === exclude) continue;   // the bot's own chat: never an unread reminder
     const count = Math.floor(Number(c.unreadCount));
     if (!(count > 0) || c.archived || SKIP_KINDS.includes(c.kind) || /@(broadcast|newsletter)$/.test(String(c.id)) || /^status@/.test(String(c.id))) continue;
     const isGroup = Boolean(c.isGroup) || c.kind === 'group' || /@g\.us$/.test(String(c.id));
@@ -57,8 +58,24 @@ async function chats(force) {
 }
 const resetCache = () => { cache = { at: 0, chats: null }; };
 
+// The bot's own number, so its messages to the owner never count as unread. GET on the bot's own session only; BOT_NUMBER overrides.
+let botNum = digits(process.env.BOT_NUMBER || '');
+async function ensureBot() {
+  if (botNum) return botNum;
+  const key = (process.env.OPENWA_API_KEY || '').trim(), id = (process.env.BOT_SESSION_ID || '').trim();
+  if (!key || !id) return '';
+  try {
+    const r = await fetch(`${URL_}/api/sessions/${encodeURIComponent(id)}`, { method: 'GET', headers: { 'X-API-Key': key }, signal: AbortSignal.timeout(10_000) });
+    if (r.ok) botNum = digits(String((await r.json())?.phone || '').split('@')[0]);
+  } catch {}
+  if (botNum) inbox.setBotPhone(botNum);
+  return botNum;
+}
+ensureBot();
+
 async function list({ force = false, isVip } = {}) {
-  return parse(await chats(force), { incoming: storedIncoming, isVip });
+  const exclude = await ensureBot();
+  return parse(await chats(force), { incoming: storedIncoming, isVip, exclude });
 }
 
 async function unreadText(limit = 15) {

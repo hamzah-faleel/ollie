@@ -121,6 +121,9 @@ async function refine(items) {
 
 // Chats where the newest message is from them and the owner has not answered, oldest wait first. No AI involved.
 // Only as good as the data: owner replies appear only if the personal webhook also sends message.sent (or history was fetched).
+let botDigits = digits(process.env.BOT_NUMBER || '');
+const setBotPhone = (p) => { botDigits = digits(p); };
+
 function pending(minMinutes = Number(process.env.PENDING_MIN_MINUTES || 30), days = 7) {
   const now = Date.now();
   // Automatic replies from the intake form / AI chat (source 'bot-auto') are not you answering, so they are left out.
@@ -130,6 +133,7 @@ function pending(minMinutes = Number(process.env.PENDING_MIN_MINUTES || 30), day
   const out = [];
   for (const list of byChat.values()) {
     const last = list[list.length - 1];
+    if (botDigits && digits(String(last.chat_id).split('@')[0]) === botDigits) continue;      // the bot's own chat is not a person waiting on you
     if (last.from_me || now - last.ts < minMinutes * 60_000) continue;
     let verdict = needsReply(list.slice(-3));
     if (verdict === 'no') continue;
@@ -242,4 +246,4 @@ function clear() {
   return `Deleted ${n} stored message${n === 1 ? '' : 's'}.`;
 }
 
-module.exports = { needsReply, isCloser, refine, ingest, ingestBot, pending, pendingText, insertRaw, purge, digest, about, status, clear, redact, digits };
+module.exports = { needsReply, isCloser, refine, ingest, ingestBot, pending, setBotPhone, pendingText, insertRaw, purge, digest, about, status, clear, redact, digits };
