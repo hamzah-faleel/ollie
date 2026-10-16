@@ -348,6 +348,13 @@ async function handleCommand(cmd, sessionId, chatId, args = '') {
       let s = await claude.remote.start();
       for (let i = 0; i < 20 && s.running && !s.url; i++) { await new Promise((r) => setTimeout(r, 2000)); s = await claude.remote.status(); }
       const login = /log ?in|auth|unauthori[sz]ed|not logged/i.test(s.tail || '');
+      const trust = /Trust .*\[y\/N\]/i.test(s.tail || '');
+      if (s.running && !s.url) {
+        await claude.remote.stop().catch(() => {});
+        return sendText(sessionId, chatId, trust
+          ? 'It is waiting for you to trust the working folder (one time only). Run  docker exec -it claude-bridge sh -c "cd work && claude"  on the server, answer yes, exit, then send /code start again.'
+          : `It started but no link appeared, so I stopped it. Last output:\n${(s.tail || '(nothing)').slice(-250)}`);
+      }
       await sendText(sessionId, chatId, s.running
         ? `✅ Claude Code is ready. Open the Claude app > Code and pick *wa-code*${s.url ? `, or open ${s.url}` : ''}.\nIt works on a separate copy of the repo with no access to your .env files. Each action asks you for approval in the app. /code stop when you are done.`
         : `Could not start it${login ? ': the bridge is not logged in yet. Run  docker exec -it claude-bridge claude  once and use /login.' : '.'}${s.tail ? `\n${s.tail.slice(-200)}` : ''}`);
