@@ -116,6 +116,9 @@ async function confirm(ownerChat, send) {
     return `Couldn't send to ${d.to_name}: ${e.message.slice(0, 160)}`;
   }
   db.prepare("UPDATE outbox SET status = 'sent', sent_at = ? WHERE id = ?").run(Date.now(), d.id);
+  try { // remember it as the owner's own reply, so /pending and the alerts know that chat was answered
+    require('./inbox').insertRaw({ msg_id: `bot-owner-${d.id}`, chat_id: d.to_chat, chat_name: d.to_name, sender: 'Me', is_group: false, ts: Date.now(), type: 'text', text: d.text, seen: true, from_me: true, phone: d.to_chat.split('@')[0], source: 'bot-owner' });
+  } catch (e) { console.warn('[outbox] not recorded in inbox:', e.message); }
   console.log(`[outbox] sent #${d.id} to ${d.to_name}`);
   return `✅ Sent to ${d.to_name}.`;
 }

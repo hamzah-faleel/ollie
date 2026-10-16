@@ -47,6 +47,9 @@ const models = require('./models');
 const inbox = require('./inbox');
 const memory = require('./memory');
 const forward = require('./forward');
+const alerts = require('./alerts');
+const intake = require('./intake');
+const relationships = require('./relationships');
 const { fmt } = require('./tools');
 
 async function systemPrompt() {
@@ -154,38 +157,39 @@ function isOwner(msg) {
 
 const MAX_MEDIA_BYTES = 15 * 1024 * 1024;
 
-const HELP = `*What I can do*
+const EXAMPLES = `*Things you can just say*
 - Chat, or send me a voice note
-- _"Remind me in 20 minutes to call Mum"_
-- _"Remind me every Monday at 9 to post the weekly update"_
+- _"Remind me in 20 minutes to call Mum"_ / _"Remind me every Monday at 9 to post the weekly update"_
 - Send a photo, screenshot or PDF and ask about it
-- _"Note: idea for the next shoot…"_
-- _"What did I note about…?"_
-- _"Log: finished the proposal draft"_
+- _"Note: idea for the next shoot…"_ / _"What did I note about…?"_ / _"Log: finished the proposal draft"_
 - _"Any new email?"_ / _"Draft a reply to Sam saying yes"_
 - _"What's on today?"_ / _"Add lunch with Sam tomorrow at 1"_
 - _"Add a task: submit the report by Friday"_ / _"What's on my to-do list?"_
 - _"Sam's number is 077…, his birthday is 14 May"_ or send me a .vcf / shared contact
 - _"Remember that I'm training for a 10k"_ (I keep a profile of your life)
 - _"Message Sam that I'm running late"_ (I show a draft and send only after you say yes)
-- _"What's the weather like?"_
+- _"What's the weather like?"_`;
 
-*Commands*
-/today - today's calendar and reminders
-/tasks - your to-do list
-/weather - 3-day forecast
-/graph - an interactive map of your notes (HTML file)
-/briefing - send the morning briefing now
-/inbox - summary of new messages from your personal WhatsApp (/inbox <name>, /inbox status, /inbox clear)
-/pending - chats waiting for your reply (from your stored messages, no AI)
-/forward - relay messages sent to my number straight to you (/forward replies|all|off)
-/memory - status of the nightly update of your private People notes (/memory run to do it now)
-/usage - AI messages, tokens and cost (today, week, month)
-/model - show or switch the AI model (/model <slug>, /model reset)
-/voice - toggle spoken replies to your voice notes
-/reminders - upcoming reminders
-/notes - recent notes
-/reset - clear chat memory (notes and reminders stay)`;
+const MENU = `*Menu* - /help <topic> for details
+📨 *Messages*: /pending /inbox /forward
+🚨 *Alerts*: /alerts /ack /vip /watch /callme
+🧠 *Second brain*: /memory /rel /graph /notes
+🙋 *New people*: /intake /people /allow /deny
+📅 *Your day*: /today /tasks /reminders /weather /briefing
+🤖 *AI & cost*: /usage /model
+⚙️ *Other*: /voice /reset
+
+Topics: /help alerts · messages · people · brain · ai · examples`;
+
+const TOPICS = {
+  alerts: `*Alerts* (no AI)\nEvery minute I check your calendar for online meetings, and every ${process.env.WATCH_INTERVAL_MIN || 10} minutes your messages. I alert you about:\n- an online meeting about to start (10 min and 2 min before)\n- a message with urgent wording (urgent, asap, call me...), several pings in a row, or a VIP, that you haven't answered\n- a missed WhatsApp call\n- chats waiting for your reply for 2h+ (a gentle nudge)\nUrgent alerts you don't acknowledge escalate to a phone call if calls are set up. Reply anything (or /ack) to acknowledge.\n/alerts open alerts · /vip add <name> · /watch status and quiet hours · /callme test call`,
+  messages: `*Messages*\n/pending chats waiting for your reply · /inbox AI digest of your personal WhatsApp (/inbox <name>) · /forward relay messages sent to my number (replies | all | off).\nI never reply to your contacts on my own. To message someone, say "message Sam ..." and approve the draft with yes.`,
+  people: `*New people* (messages to my number)\n/intake on makes me ask new numbers 4 fixed questions (name, how they know you, club/company, best time). No AI. Answers go to their private note.\nI only chat with someone using AI after you say /allow <name>. I'll suggest it when someone has chatted a lot and you're in touch. /deny <name> says no. /people shows everyone. /intake off stops it all.`,
+  brain: `*Second brain*\n/memory nightly update of your private People notes · /rel sort people into who-is-who (family, friend, uni club, classmate, work, former work, client...) · /graph map of your notes · /notes recent notes.`,
+  ai: `*AI & cost*\n/usage spend and tokens · /model show or switch the model. Everything private goes through OpenRouter's zero-data-retention routing. Daily spend limit: ${process.env.DAILY_SPEND_LIMIT_USD ?? 0.5} USD.`,
+  examples: EXAMPLES,
+};
+const helpText = (topic) => (topic ? (TOPICS[topic.toLowerCase()] || `No help topic "${topic}".\n\n${MENU}`) : MENU);
 
 // Today's agenda without spending any AI quota.
 const hm = (iso) => new Date(iso).toLocaleTimeString('en-GB', { timeZone: cfg.timezone, hour: '2-digit', minute: '2-digit' });
@@ -284,6 +288,20 @@ async function handleCommand(cmd, sessionId, chatId, args = '') {
     return sendText(sessionId, chatId, out); // sent directly, not saved to chat memory, so the tool-enabled assistant never sees it
   }
   if (cmd === '/pending') return sendText(sessionId, chatId, inbox.pendingText());
+  if (cmd === '/alerts') return sendText(sessionId, chatId, alerts.list());
+  if (cmd === '/ack') return sendText(sessionId, chatId, `Acknowledged${alerts.ack() ? '' : ' (nothing was open)'}.`);
+  if (cmd === '/watch') {
+    if (args.trim() !== 'now') return sendText(sessionId, chatId, alerts.status());
+    const n = await alerts.scanNow({ suggestions: intake.suggestions });
+    return sendText(sessionId, chatId, n ? `Checked just now: ${n} new alert${n === 1 ? '' : 's'} (sent above).` : 'Checked just now: nothing needs your attention.');
+  }
+  if (cmd === '/callme') return sendText(sessionId, chatId, await alerts.callTest());
+  if (cmd === '/vip') return sendText(sessionId, chatId, alerts.vip(args));
+  if (cmd === '/intake') return sendText(sessionId, chatId, intake.intakeCommand(args));
+  if (cmd === '/people') return sendText(sessionId, chatId, intake.people());
+  if (cmd === '/allow') return sendText(sessionId, chatId, intake.allow(args));
+  if (cmd === '/deny') return sendText(sessionId, chatId, intake.deny(args));
+  if (cmd === '/rel') return sendText(sessionId, chatId, await relationships.command(args));
   if (cmd === '/forward') {
     const arg = args.trim().toLowerCase();
     if (arg && !forward.setMode(arg)) return sendText(sessionId, chatId, `Unknown mode "${arg}". Use /forward replies, /forward all or /forward off.`);
@@ -326,7 +344,7 @@ async function handleCommand(cmd, sessionId, chatId, args = '') {
   }
   if (cmd === '/briefing') return sendText(sessionId, chatId, await briefingText(chatId));
   if (cmd === '/today') return sendText(sessionId, chatId, await todayText(chatId));
-  if (cmd === '/help' || cmd === '/start') return sendText(sessionId, chatId, HELP);
+  if (cmd === '/help' || cmd === '/start' || cmd === '/menu') return sendText(sessionId, chatId, helpText(args.trim()));
   return false;
 }
 
@@ -347,24 +365,26 @@ ai.bus.on('spend-limit', async ({ spent, limit, model }) => {
 });
 
 async function handle(event) {
-  // Only incoming messages are handled, plus the owner's OWN outgoing messages on the personal session (stored so /pending knows what was answered).
-  const ownSent = event.event === 'message.sent' && cfg.personalSession && event.sessionId === cfg.personalSession;
-  if (event.event !== 'message.received' && !ownSent) return;
   const msg = event.data || {};
   const sessionId = event.sessionId;
-  if (cfg.personalSession && sessionId === cfg.personalSession) { // other people's messages: store only, never answer or act
-    if (inbox.ingest(event)) console.log('[inbox] stored 1 message');
+  if (cfg.personalSession && sessionId === cfg.personalSession) {
+    // The owner's personal session is read-only: store what arrives (and the owner's own sent messages, so /pending and the alerts know what was
+    // answered), record missed calls, and never answer or act on any of it.
+    if (event.event === 'message.received' || event.event === 'message.sent') { if (inbox.ingest(event)) console.log('[inbox] stored 1 message'); }
+    else if (event.event === 'call.missed') { if (alerts.recordCall(event)) console.log('[alerts] missed call recorded'); }
     return;
   }
+  if (event.event !== 'message.received') return;
   if (cfg.botSession && sessionId !== cfg.botSession) return; // e.g. a read-only personal session: never act on it
   if (msg.fromMe || msg.isGroup || msg.kind !== 'individual') return;
 
   if (!isOwner(msg)) {
-    // Someone else wrote to the bot's number: store it and (per /forward) relay it to the owner. No AI, and no answer goes back to them.
+    // Someone else wrote to the bot's number: store it and (per /forward) relay it to the owner. Replies to them come only from the intake form
+    // (fixed text) or an AI chat the owner allowed (intake.js).
     const relayed = await forward.handle(msg, async (t) => {
       const target = JSON.parse(db.getKv('owner_target') || 'null');
       if (target) await sendText(target.sessionId, target.chatId, t);
-    }).catch((e) => { console.warn('[forward]', e.message); return false; });
+    }, (t) => sendText(sessionId, msg.chatId, t)).catch((e) => { console.warn('[forward]', e.message); return false; });
     if (relayed) return;
     console.log(`Ignored message from ${msg.from} (senderPhone=${msg.senderPhone ?? 'n/a'}). Add your number to OWNER_NUMBERS if this is you.`);
     return;
@@ -372,6 +392,7 @@ async function handle(event) {
 
   db.setKv('owner_target', JSON.stringify({ sessionId, chatId: msg.chatId })); // where scheduled messages go
   db.setKv('last_owner_msg_at', Date.now());                                    // shown on the server dashboard
+  alerts.ack();                                                                // any message from the owner acknowledges open alerts
 
   let text = (msg.body || '').trim();
   let viaVoice = false;
@@ -572,6 +593,8 @@ vault.init()
     setTimeout(reindex, 5_000);
     setInterval(reindex, 10 * 60_000); // also catches notes edited in Obsidian
     setInterval(() => briefingTick().catch((e) => console.error('[briefing]', e.message)), 60_000);
+    alerts.init({ send: async (t) => { const target = JSON.parse(db.getKv('owner_target') || 'null'); if (!target) throw new Error('no owner chat yet'); await sendText(target.sessionId, target.chatId, t); } });
+    setInterval(() => alerts.tick({ suggestions: intake.suggestions }), Number(process.env.ALERT_TICK_MS || 60_000)); // meetings every minute, messages every WATCH_INTERVAL_MIN
     setInterval(() => memory.tick(async (text) => {  // nightly memory run; only speaks up when something needs attention
       const target = JSON.parse(db.getKv('owner_target') || 'null');
       if (target) await sendText(target.sessionId, target.chatId, text).catch(() => {});

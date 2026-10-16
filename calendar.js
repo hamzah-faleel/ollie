@@ -110,4 +110,25 @@ async function deleteEvent({ id, calendar }) {
   return { ok: true, deleted: e.summary || '(no title)' };
 }
 
-module.exports = { enabled: google.enabled, labels: LABELS, listEvents, createEvent, updateEvent, deleteEvent, startOfDay };
+// Events starting within the next `minutesAhead` minutes (or up to `graceMinutes` ago) that have a join link, for the meeting alerts.
+// Declined events and all-day events are skipped. ALERT_MEETINGS=all also includes events without a link.
+const MEETING_URL = /https?:\/\/[^\s<>"']*(?:meet\.google\.com|zoom\.us|teams\.microsoft\.com|teams\.live\.com|webex\.com|whereby\.com|jit\.si)[^\s<>"']*/i;
+async function upcomingOnline(minutesAhead = 30, graceMinutes = 3) {
+  const now = Date.now();
+  const params = new URLSearchParams({
+    timeMin: new Date(now - graceMinutes * 60_000).toISOString(), timeMax: new Date(now + minutesAhead * 60_000).toISOString(),
+    singleEvents: 'true', orderBy: 'startTime', maxResults: '20',
+    fields: 'items(id,status,summary,start,location,description,hangoutLink,conferenceData/entryPoints,attendees(self,responseStatus))',
+  });
+  const all = (process.env.ALERT_MEETINGS || 'online').toLowerCase() === 'all';
+  const lists = await Promise.all(CALENDARS.map(async (cal) => (await google.api(`${evUrl(cal.id)}?${params}`)).items || []));
+  return lists.flat()
+    .filter((e) => e.status !== 'cancelled' && e.start?.dateTime && !(e.attendees || []).some((a) => a.self && a.responseStatus === 'declined'))
+    .map((e) => ({
+      id: e.id, title: e.summary || '(no title)', startMs: Date.parse(e.start.dateTime),
+      link: e.hangoutLink || e.conferenceData?.entryPoints?.find((p) => p.uri)?.uri || MEETING_URL.exec(`${e.location || ''} ${e.description || ''}`)?.[0] || '',
+    }))
+    .filter((e) => all || e.link);
+}
+
+module.exports = { enabled: google.enabled, labels: LABELS, listEvents, createEvent, updateEvent, deleteEvent, startOfDay, upcomingOnline };

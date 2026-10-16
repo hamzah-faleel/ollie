@@ -66,7 +66,8 @@ function ingestBot(m) {
 // Only as good as the data: owner replies appear only if the personal webhook also sends message.sent (or history was fetched).
 function pending(minMinutes = Number(process.env.PENDING_MIN_MINUTES || 30), days = 7) {
   const now = Date.now();
-  const rows = db.prepare('SELECT chat_id, chat_name, from_me, ts, text FROM inbox_messages WHERE ts > ? AND is_group = 0 ORDER BY ts').all(now - days * 86_400_000);
+  // Automatic replies from the intake form / AI chat (source 'bot-auto') are not you answering, so they are left out.
+  const rows = db.prepare("SELECT chat_id, chat_name, from_me, ts, text FROM inbox_messages WHERE ts > ? AND is_group = 0 AND NOT (from_me = 1 AND source = 'bot-auto') ORDER BY ts").all(now - days * 86_400_000);
   const byChat = new Map();
   for (const r of rows) (byChat.get(r.chat_id) || byChat.set(r.chat_id, []).get(r.chat_id)).push(r);
   const out = [];
@@ -77,7 +78,7 @@ function pending(minMinutes = Number(process.env.PENDING_MIN_MINUTES || 30), day
     for (let i = list.length - 1; i >= 0 && !list[i].from_me; i--) n++;
     out.push({ name: last.chat_name, count: n, since: list[list.length - n].ts, preview: last.text.replace(/\s+/g, ' ').slice(0, 60) });
   }
-  const sawOwnReplies = (db.prepare('SELECT COUNT(*) n FROM inbox_messages WHERE from_me = 1 AND ts > ?').get(now - days * 86_400_000).n || 0) > 0;
+  const sawOwnReplies = (db.prepare("SELECT COUNT(*) n FROM inbox_messages WHERE from_me = 1 AND source != 'bot-auto' AND ts > ?").get(now - days * 86_400_000).n || 0) > 0;
   return { items: out.sort((a, b) => a.since - b.since), sawOwnReplies };
 }
 
@@ -109,7 +110,7 @@ function ingest(event) {
   const ts = raw ? (raw < 1e12 ? raw * 1000 : raw) : Date.now();
   const phone = digits(m.senderPhone) || (/@(c\.us|s\.whatsapp\.net)$/.test(String(m.chatId)) ? digits(String(m.chatId).split('@')[0]) : '');
   insertRaw({ msg_id: m.id || `${event.sessionId}-${ts}-${Math.random()}`, chat_id: m.chatId, chat_name: chatName, sender, is_group: isGroup, ts, type: m.type, text,
-    seen: sent, from_me: sent, phone: sent || isGroup ? '' : phone });
+    seen: sent, from_me: sent, phone: sent ? '' : (isGroup ? (digits(m.senderPhone) || (/@(c\.us|s\.whatsapp\.net)$/.test(String(m.author || '')) ? digits(String(m.author).split('@')[0]) : '')) : phone) });
   return true;
 }
 

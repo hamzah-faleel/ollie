@@ -1,10 +1,12 @@
-// Forwards messages that reach the BOT's own number from other people straight to the owner. No AI involved, and the bot never answers
-// the sender: this only relays text to the owner's chat. Messages are also stored in the inbox (source 'bot') so they join the memory.
+// Forwards messages that reach the BOT's own number from other people straight to the owner. The forwarding itself uses no AI and never
+// answers the sender. Two optional things can reply to a stranger: the intake form (fixed text, /intake on) and, only for people the
+// owner allowed with /allow, a short AI chat (see intake.js). Messages are stored in the inbox (source 'bot') so they join the memory.
 // Modes (/forward): replies = only people the bot has messaged for the owner (default) | all = every direct message | off = store only.
 // Rate limits stop a flood (or a loop) from spamming the owner: per sender and overall, per hour.
 const db = require('./db');
 const outbox = require('./outbox');
 const inbox = require('./inbox');
+const intake = require('./intake');
 
 const MODES = ['replies', 'all', 'off'];
 const PER_SENDER = Number(process.env.FORWARD_PER_SENDER_HOUR || 10);
@@ -21,13 +23,19 @@ const recent = (arr) => { const cut = Date.now() - HOUR; while (arr.length && ar
 
 const clean = (t) => String(t).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '').slice(0, 1500);
 
-// msg: the webhook's data object from the BOT session. send(text) delivers to the owner. Returns true if the message was handled (stored).
-async function handle(msg, send) {
+// msg: the webhook's data object from the BOT session. send(text) delivers to the owner; reply(text) answers the sender (used only by intake.js).
+// Returns true if the message was handled (stored).
+async function handle(msg, send, reply) {
   const rec = inbox.ingestBot(msg);
   if (!rec) return false;
   const m = mode();
+
+  // Intake form / AI chat for allowed people. They get templates or a short AI reply; the owner still gets everything forwarded.
+  let gate = null;
+  if (reply) gate = await intake.handle(rec, { chatId: msg.chatId, reply, notifyOwner: send }).catch((e) => { console.warn('[intake]', e.message); return null; });
+
   if (m === 'off') return true;
-  if (m === 'replies' && !outbox.hasSentTo(rec.phone)) return true;
+  if (!gate?.forward && m === 'replies' && !outbox.hasSentTo(rec.phone)) return true;
 
   const key = rec.phone || String(msg.chatId);
   const mine = recent(sentAt.get(key) || sentAt.set(key, []).get(key));
@@ -47,7 +55,7 @@ async function handle(msg, send) {
 const describe = () => {
   const m = mode();
   return `*Forwarding*\nMode: *${m}* - ${{ replies: 'replies from people I have messaged for you', all: 'every direct message to my number', off: 'nothing is forwarded (messages are still stored)' }[m]}.\n`
-    + `Limits: ${PER_SENDER} per person and ${TOTAL} overall per hour. I never answer them.\n/forward replies | /forward all | /forward off`;
+    + `Limits: ${PER_SENDER} per person and ${TOTAL} overall per hour. Intake form: ${intake.mode()} (/intake).\n/forward replies | /forward all | /forward off`;
 };
 
 module.exports = { handle, mode, setMode, describe };

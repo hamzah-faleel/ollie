@@ -89,4 +89,18 @@ section('other', () => {
   };
 });
 
+section('attention', () => {
+  const al = one('SELECT COUNT(*) n, SUM(urgent = 1) urgent FROM alerts WHERE acked_at IS NULL AND resolved_at IS NULL');
+  const day = one('SELECT COUNT(*) n, SUM(called_at IS NOT NULL) calls FROM alerts WHERE created_at > ?', Date.now() - 86_400_000);
+  const people = Object.fromEntries(all("SELECT CASE WHEN status != 'done' THEN status WHEN ai_state = 'allowed' THEN 'ai_allowed' ELSE 'done' END k, COUNT(*) n FROM intake_people GROUP BY k").map((r) => [r.k, r.n]));
+  const twilio = Boolean(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_FROM);
+  return {
+    openAlerts: al.n || 0, openUrgent: al.urgent || 0, alerts24h: day.n || 0, calls24h: day.calls || 0, lastScanAt: Number(kv('watch_last_scan') || 0) || null,
+    intervalMin: Number(process.env.WATCH_INTERVAL_MIN || 10), callsConfigured: twilio, callLimit: Number(process.env.CALL_DAILY_LIMIT || 5),
+    quiet: (process.env.ALERT_QUIET ?? '23:30-07:00').trim() || null, vips: one('SELECT COUNT(*) n FROM vips').n || 0,
+    intakeMode: (kv('intake_mode') || process.env.INTAKE_MODE || 'off'), forwardMode: (kv('forward_mode') || process.env.FORWARD_MODE || 'replies'),
+    people, waitingForReply: one("SELECT COUNT(DISTINCT chat_id) n FROM inbox_messages WHERE is_group = 0 AND from_me = 0 AND ts > ?", Date.now() - 7 * 86_400_000).n || 0,
+  };
+});
+
 process.stdout.write(JSON.stringify(out));

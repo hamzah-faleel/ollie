@@ -45,4 +45,9 @@ async function untrusted(system, user, maxTokens) {
   return turnStore.run(crypto.randomUUID(), () => provider.plain(system, user, maxTokens));
 }
 
-module.exports = { reply, untrusted, QuotaError, BusyError, CreditError, bus, providerName: provider.name };
+async function converse(system, messages, maxTokens) {
+  if (typeof provider.converse !== 'function') throw new Error('Chatting with outside people needs AI_PROVIDER=openrouter (zero-data-retention routing).');
+  return turnStore.run(crypto.randomUUID(), () => provider.converse(system, messages, maxTokens));
+}
+
+module.exports = { reply, untrusted, converse, QuotaError, BusyError, CreditError, bus, providerName: provider.name };

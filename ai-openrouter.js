@@ -89,6 +89,11 @@ module.exports = {
     const state = { messages: [{ role: 'system', content: system }, { role: 'user', content: user }], models: await modelList(), modelIdx: 0, maxTokens };
     return String((await complete(state, null)).content || '').trim();
   },
+  // A short tool-less chat turn with an outside person (messages: [{role:'user'|'assistant', content}]). Same privacy routing, no tools.
+  async converse(system, messages, maxTokens) {
+    const state = { messages: [{ role: 'system', content: system }, ...messages], models: await modelList(), modelIdx: 0, maxTokens };
+    return String((await complete(state, null)).content || '').trim();
+  },
   async start(systemPrompt, history, media) {
     const list = await modelList();
     // The clock changes every second; keep it out of the system prompt so the prompt prefix can be cached,

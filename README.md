@@ -86,6 +86,23 @@ The bot can read new messages from your personal WhatsApp (everyone, groups incl
 - `/pending` lists chats where the newest message is theirs and you haven't answered (default: waiting 30+ minutes, last 7 days). The morning briefing includes a short "Waiting for your reply" section. It only knows you answered if the personal-session webhook also sends `message.sent`: update it with `curl -X PUT http://127.0.0.1:2785/api/sessions/<personal session id>/webhooks/<webhook id> -H "X-API-Key: <key>" -H "Content-Type: application/json" -d '{"events":["message.received","message.sent"]}'`.
 - Messages sent to the **bot's own number** by other people (for example replies to a message the bot sent for you) are stored and forwarded to you as `↩️ Name (+number): text`. `/forward replies` (default) relays only people the bot has messaged for you, `/forward all` relays every direct message, `/forward off` only stores them. At most 10 forwards per person and 60 overall per hour (`FORWARD_PER_SENDER_HOUR`, `FORWARD_TOTAL_HOUR`), with a single "holding back" notice. The bot never answers these people on its own.
 
+### Alerts and the routine check (no AI)
+Every minute the bot checks your calendar for **online meetings** (it needs a Meet/Zoom/Teams link) and every 10 minutes your **messages**. It texts you on WhatsApp about:
+- a meeting starting in 10 min, and again urgently at 2 min;
+- a message that sounds urgent (urgent, asap, call me...), several pings in a row, or a message from a **VIP** (`/vip add <name>`) that you haven't answered;
+- a missed WhatsApp call (needs the `call.missed` event on the personal webhook);
+- chats waiting for your reply for 2h+ (a gentle nudge, daytime only).
+Replying to the bot with anything (or `/ack`) acknowledges. An **urgent** alert you don't acknowledge within 4 minutes escalates to a **phone call** if you set up Twilio. Quiet hours (default 23:30-07:00) hold normal alerts and suppress calls. Limits: 8 alert texts an hour, 5 calls a day. `/alerts` lists, `/watch` shows what is watched, `/watch now` checks immediately.
+- **Phone calls** (optional): OpenWA cannot place calls, so create a Twilio account (a number that can call your phone), then set `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM` in `.env` and rebuild. `/callme` places a test call. By default the call says only "you have an urgent message on WhatsApp" (`CALL_SPEAK_DETAILS=true` adds the name or meeting title, which Twilio will see).
+- **Webhook events:** update the personal-session webhook to `["message.received","message.sent","call.missed"]` with the same `PUT` as in "Waiting for your reply".
+
+### New people: the intake form and the AI gate
+`/intake on` makes the bot ask a **new** number that writes to it four fixed questions (name, how they know you with a menu that separates *uni club*, *classmate*, *work*, *former work*, *client*, club/company, best time to reach). No AI. The answers are saved in their private note and you get a summary. People you already know (they have a note, a contact, or the bot messaged them for you) are never put through it. STOP is honoured forever; at most 5 new people a day and 12 template messages per person a day. `/people` lists everyone.
+The AI only talks to someone after you say `/allow <name>`. It is suggested to you when someone has finished the form, written 5+ times, and you're in touch (at most 2 suggestions a day, each person once a week). An allowed chat is short (2 sentences), never shares links, emails or personal details, can't agree to anything, uses the zero-data-retention route with no tools, is limited to 6 replies an hour per person, and every exchange is copied to you. `/allow off <name>`, `/allow off all` or `/intake off` stop it.
+
+### Who is who: relationships
+Relationships used to be guessed from chat text, which mixed up uni clubs and work. Now **you** decide: `/rel` shows people one page at a time with a keyword hint, and you reply like `/rel 1=c 2=e 3=skip`. Letters: A family, B friend, C uni club, D classmate, E work, F former work, G client, H shop/service, I acquaintance, J other. Your choice is marked `reviewed: true` and the nightly memory job never changes it. `/rel stats` shows the split.
+
 ### Memory: keeping the Private/People notes up to date
 A background job turns your personal chats into the hidden `Private/People/<Name>.md` notes (snapshot, how you talk, open loops, key moments, facts), so your second brain follows your conversations.
 - **When:** every night at `MEMORY_TIME` (default 03:00 local), or `/memory run` to start it now, `/memory` for status. It is quiet unless something needs attention.

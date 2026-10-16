@@ -8,7 +8,7 @@ const WIKILINK = /\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|[^\]]*)?\]\]/g;
 // `relationship:` value -> group label; vague or missing answers all land in "Unsorted".
 function relGroup(v) {
   const r = v.replace(/^["']|["']$/g, '').trim().toLowerCase();
-  if (!r || ['unsure', 'unknown', 'none', 'n/a'].includes(r)) return 'Unsorted';
+  if (!r || ['unsure', 'unknown', 'none', 'n/a', 'unsorted'].includes(r)) return 'Unsorted';
   return r[0].toUpperCase() + r.slice(1);
 }
 

@@ -189,7 +189,7 @@ async function consolidate(report, spent) {
       const last = new Date(chunk[chunk.length - 1].ts).toLocaleDateString('en-CA', { timeZone: TZ });
       const prev = /^last_contact:[ \t]*(\d{4}-\d{2}-\d{2})/m.exec(fm)?.[1] || '';
       fm = setFm(fm || 'private: true', {
-        private: 'true', ...(phone ? { phone: `+${digits(phone)}` } : {}), ...(/^relationship:/m.test(fm) ? {} : { relationship: 'unsure' }),
+        private: 'true', ...(phone ? { phone: `+${digits(phone)}` } : {}), ...(/^relationship:/m.test(fm) ? {} : { relationship: 'unsorted' }),
         last_contact: prev > last ? prev : last, source: `whatsapp-memory ${new Date().toLocaleDateString('en-CA', { timeZone: TZ })}`,
       });
       await fs.mkdir(path.dirname(file), { recursive: true });
@@ -270,4 +270,4 @@ async function tick(notify) {
   } catch (e) { console.error('[memory]', e.message); }
 }
 
-module.exports = { run, describe, status, tick };
+module.exports = { run, describe, status, tick, peopleNotes, splitNote, setFm };
