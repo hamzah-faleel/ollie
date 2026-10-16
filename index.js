@@ -45,6 +45,7 @@ const tasks = require('./tasks');
 const graph = require('./graph');
 const usage = require('./usage');
 const models = require('./models');
+const claude = require('./claude');
 const pseudonym = require('./pseudonym');
 const inbox = require('./inbox');
 const unread = require('./unread');
@@ -180,7 +181,7 @@ const MENU = `*Menu* - /help <topic> for details
 🧠 *Second brain*: /memory /rel /graph /notes
 🙋 *New people*: /intake /people /allow /deny
 📅 *Your day*: /today /tasks /reminders /weather /briefing /wrap
-🤖 *AI & cost*: /usage /model /pseudo
+🤖 *AI & cost*: /usage /model /pseudo /nightly /code
 ⚙️ *Other*: /voice /reset
 
 Topics: /help alerts · messages · people · brain · day · ai · examples`;
@@ -191,7 +192,7 @@ const TOPICS = {
   people: `*New people* (messages to my number)\n/intake on makes me ask new numbers 4 fixed questions (name, how they know you, club/company, best time). No AI. Answers go to their private note.\nI only chat with someone using AI after you say /allow <name>. I'll suggest it when someone has chatted a lot and you're in touch. /deny <name> says no. /people shows everyone. /intake off stops it all.`,
   brain: `*Second brain*\n/memory nightly update of your private People notes · /rel sort people into who-is-who (family, friend, uni club, classmate, work, former work, client...) · /graph map of your notes · /notes recent notes.`,
   day: `*Your day* (no AI)\n/briefing morning summary at ${process.env.BRIEFING_TIME ?? '07:00'}. /wrap evening wrap-up at ${process.env.WRAP_TIME ?? '21:00'}: what you finished, what is still open, tomorrow's calendar, reminders and weather, birthdays tomorrow, chats waiting for you, notes from today. Not sent in quiet hours, once a day.\nBirthday reminders come the evening before (inside the wrap-up). I only suggest a message; nothing is sent until you say yes.`,
-  ai: `*AI & cost*\n/usage spend and tokens · /model show or switch the model · /pseudo on|off hide names, numbers, emails and addresses from the AI (placeholders, put back in my answer; default on). Everything private goes through OpenRouter's zero-data-retention routing. Daily spend limit: ${process.env.DAILY_SPEND_LIMIT_USD ?? 0.5} USD.`,
+  ai: `*AI & cost*\n/usage spend and tokens · /model show or switch the model · /nightly claude|openrouter which AI does the nightly memory run (Claude via the isolated bridge, tools off) · /code start|status|stop opens a Claude Code session you drive from the Claude app · /pseudo on|off hide names, numbers, emails and addresses from the AI (placeholders, put back in my answer; default on). Everything private goes through OpenRouter's zero-data-retention routing. Daily spend limit: ${process.env.DAILY_SPEND_LIMIT_USD ?? 0.5} USD.`,
   examples: EXAMPLES,
 };
 const helpText = (topic) => (topic ? (TOPICS[topic.toLowerCase()] || `No help topic "${topic}".\n\n${MENU}`) : MENU);
@@ -324,6 +325,34 @@ async function handleCommand(cmd, sessionId, chatId, args = '') {
       .catch((e) => { console.error('[memory]', e.message); return sendText(sessionId, chatId, `Memory run failed: ${e.message.slice(0, 120)}`); })
       .catch(() => {});
     return sendText(sessionId, chatId, 'Started. Updating your private notes from your messages; this can take a few minutes.');
+  }
+  if (cmd === '/nightly') {
+    const arg = args.trim().toLowerCase();
+    if (arg === 'claude' && !claude.enabled()) return sendText(sessionId, chatId, 'The Claude bridge is not set up yet (CLAUDE_BRIDGE_URL / CLAUDE_BRIDGE_TOKEN), so nightly runs stay on OpenRouter.');
+    if (arg === 'claude' || arg === 'openrouter') claude.setNightly(arg);
+    else if (arg) return sendText(sessionId, chatId, 'Use /nightly claude or /nightly openrouter.');
+    return sendText(sessionId, chatId, `Nightly memory runs use: *${claude.nightlyOn() ? 'Claude (isolated bridge, all tools off, names hidden first; falls back to OpenRouter if it fails)' : 'OpenRouter (zero-data-retention)'}*.`);
+  }
+  if (cmd === '/code') {
+    const arg = args.trim().toLowerCase() || 'status';
+    if (!claude.enabled()) return sendText(sessionId, chatId, 'The Claude bridge is not set up yet (see README, Claude bridge).');
+    if (arg === 'stop') return sendText(sessionId, chatId, (await claude.remote.stop().then(() => 'Stopped the Claude Code session server.').catch((e) => `Could not stop it: ${e.message.slice(0, 100)}`)));
+    if (arg === 'status') {
+      const s = await claude.remote.status().catch((e) => ({ error: e.message }));
+      if (s.error) return sendText(sessionId, chatId, `The bridge is not reachable: ${s.error.slice(0, 100)}`);
+      return sendText(sessionId, chatId, s.running ? `A Claude Code session server is running${s.url ? `: ${s.url}` : ''}. Open the Claude app > Code and pick "wa-code". /code stop ends it.` : 'No Claude Code session is running. /code start begins one.');
+    }
+    if (arg !== 'start') return sendText(sessionId, chatId, 'Use /code start, /code status or /code stop.');
+    // The session is driven from the Claude app (your account), never from WhatsApp text. This only starts it and hands over the details.
+    (async () => {
+      let s = await claude.remote.start();
+      for (let i = 0; i < 20 && s.running && !s.url; i++) { await new Promise((r) => setTimeout(r, 2000)); s = await claude.remote.status(); }
+      const login = /log ?in|auth|unauthori[sz]ed|not logged/i.test(s.tail || '');
+      await sendText(sessionId, chatId, s.running
+        ? `✅ Claude Code is ready. Open the Claude app > Code and pick *wa-code*${s.url ? `, or open ${s.url}` : ''}.\nIt works on a separate copy of the repo with no access to your .env files. Each action asks you for approval in the app. /code stop when you are done.`
+        : `Could not start it${login ? ': the bridge is not logged in yet. Run  docker exec -it claude-bridge claude  once and use /login.' : '.'}${s.tail ? `\n${s.tail.slice(-200)}` : ''}`);
+    })().catch((e) => { console.error('[code]', e.message); return sendText(sessionId, chatId, `Could not start it: ${e.message.slice(0, 120)}`); }).catch(() => {});
+    return sendText(sessionId, chatId, 'Starting a Claude Code session... I will send the details in a few seconds.');
   }
   if (cmd === '/usage') return sendText(sessionId, chatId, usage.report());
   if (cmd === '/pseudo') return sendText(sessionId, chatId, pseudonym.command(args));

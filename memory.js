@@ -9,6 +9,7 @@ const db = require('./db');
 const ai = require('./ai');
 const usage = require('./usage');
 const inbox = require('./inbox');
+const claude = require('./claude');
 const { files } = require('./vault');
 
 const URL_ = (process.env.OPENWA_URL || 'http://openwa-api:2785').replace(/\/$/, '');
@@ -179,7 +180,7 @@ async function consolidate(report, spent) {
       const user = `<existing_note>\n${body.trim() || '(none yet)'}\n</existing_note>\n<new_messages chat="${title}">\n`
         + chunk.map((r) => `[${fmtTime(r.ts)}] ${r.from_me ? 'Me' : name}: ${r.text}`).join('\n') + '\n</new_messages>';
       let out;
-      try { out = (await ai.untrusted(SYSTEM, user, 4096)).replace(/^```(?:markdown|md)?\n?|\n?```$/g, '').trim(); }
+      try { out = (await ai.untrusted(SYSTEM, user, 4096, claude.nightlyOn() ? { via: 'claude' } : {})).replace(/^```(?:markdown|md)?\n?|\n?```$/g, '').trim(); }
       catch (e) { console.warn('[memory] model call failed:', e.message); report.errors++; if (e instanceof ai.CreditError) report.creditStop = true; return spent; }
       spent += user.length;
       if (out.toUpperCase() === 'SKIP') { chunk.forEach((r) => mark.run(r.msg_id)); report.skipped++; continue; }

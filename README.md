@@ -149,3 +149,11 @@ Note: Google treats `gmail.readonly` as a restricted scope. For personal use you
 
 ## Backup
 `docker run --rm -v openwa_wa-bot-data:/data -v $PWD:/out alpine tar czf /out/wa-bot-backup.tgz /data`
+
+
+## Claude bridge (nightly runs on Claude, `/code` from your phone)
+Claude Code runs in its own container so it can never read the bot's `.env` files.
+1. `cd ~/OpenWA && docker compose up -d --build claude-bridge` (needs `claude-bridge.env` with `BRIDGE_TOKEN=<random>`; the same value goes into `wa-bot/.env` as `CLAUDE_BRIDGE_TOKEN`, plus `CLAUDE_BRIDGE_URL=http://claude-bridge:8787`).
+2. Log in once: `docker exec -it claude-bridge claude`, then `/login` (a Claude subscription is needed for Remote Control).
+3. Rebuild the bot with `docker compose up -d --build --no-deps wa-bot`.
+4. WhatsApp: `/nightly claude` (nightly memory run on Claude, all tools off), `/code start` (opens a Claude Code session you then drive from the Claude app > Code; each action asks you for approval), `/code stop`.

@@ -4,6 +4,7 @@
 const tools = require('./tools');
 const { QuotaError, BusyError, CreditError, turnStore, bus } = require('./ai-common');
 const pseudonym = require('./pseudonym');
+const claude = require('./claude');
 const crypto = require('crypto');
 
 // Raised when personal data could not be hidden: nothing was sent to the AI (fail closed).
@@ -66,13 +67,21 @@ async function run(systemPrompt, history, ctx, media) {
   return { text: 'I got stuck in a loop doing that. Could you rephrase?', toolsUsed };
 }
 
-// Summarize text from other people with no tools, only via OpenRouter's zero-data-retention routing. Fails closed otherwise.
-async function untrusted(system, user, maxTokens) {
-  if (typeof provider.plain !== 'function') throw new Error('Inbox processing needs AI_PROVIDER=openrouter (zero-data-retention routing).');
+// Summarize text from other people with no tools. Default: OpenRouter zero-data-retention routing, fails closed.
+// opts.via === 'claude' (nightly runs): the claude-bridge with every Claude Code tool disabled; falls back to OpenRouter if the bridge fails.
+// Either way the text is pseudonymized first.
+async function untrusted(system, user, maxTokens, opts = {}) {
+  const viaClaude = opts.via === 'claude' && claude.enabled();
+  const run = async (sys, msg) => {
+    if (viaClaude) { try { return await claude.ask(sys, msg); } catch (e) { console.warn('[ai] claude bridge failed, using OpenRouter:', e.message); } }
+    if (typeof provider.plain !== 'function') throw new Error('Inbox processing needs AI_PROVIDER=openrouter (zero-data-retention routing).');
+    return turnStore.run(crypto.randomUUID(), () => provider.plain(sys, msg, maxTokens));
+  };
+  if (!viaClaude && typeof provider.plain !== 'function') throw new Error('Inbox processing needs AI_PROVIDER=openrouter (zero-data-retention routing).');
   const p = await pseudoSession();
-  if (!p) return turnStore.run(crypto.randomUUID(), () => provider.plain(system, user, maxTokens));
+  if (!p) return run(system, user);
   const [sys, msg] = guard(() => [p.hide(`${system}\n${pseudonym.HINT}`), p.hide(user)]);
-  const out = await turnStore.run(crypto.randomUUID(), () => provider.plain(sys, msg, maxTokens));
+  const out = await run(sys, msg);
   return guard(() => p.show(out));
 }
 
