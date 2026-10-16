@@ -21,6 +21,12 @@ async function openTasks() {
   return parse(await read()).filter((t) => !t.done).sort(byDue);
 }
 
+// Tasks completed on the given day (YYYY-MM-DD), recognised by the "✅ date" the bot adds on completion.
+async function doneOn(day) {
+  await files.pull();
+  return parse(await read()).filter((t) => t.done && t.text.includes(`✅ ${day}`)).map((t) => t.text.replace(/\s*✅\s*\d{4}-\d{2}-\d{2}/, '').trim());
+}
+
 async function addTask({ text, due }) {
   if (!text || !String(text).trim()) return { error: 'Need the task text.' };
   if (due && !/^\d{4}-\d{2}-\d{2}$/.test(due)) return { error: 'due must be YYYY-MM-DD.' };
@@ -50,4 +56,4 @@ async function completeTask({ match }) {
   return { status: 'completed', text: hits[0].text };
 }
 
-module.exports = { openTasks, addTask, listTasks, completeTask };
+module.exports = { openTasks, addTask, listTasks, completeTask, doneOn };

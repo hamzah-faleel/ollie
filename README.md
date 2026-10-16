@@ -144,6 +144,7 @@ Adds search, read and draft tools. The bot can save drafts but never sends email
 1. In the same Google Cloud project, enable the **Gmail API** and add the scopes `gmail.readonly` and `gmail.compose` to the consent screen.
 2. Re-run `docker exec -it wa-bot node google-auth.js` (it now requests the Gmail scopes too) and replace `GOOGLE_REFRESH_TOKEN` in `.env`.
 3. Add `GMAIL_ENABLED=true` to `.env`, then `cd ~/OpenWA && docker compose up -d wa-bot`.
+Sending email (optional, off by default): add the `gmail.send` scope to the consent screen, re-run `google-auth.js` once more and replace `GOOGLE_REFRESH_TOKEN`, then set `GMAIL_SEND_ENABLED=true` and rebuild with `cd ~/OpenWA && docker compose up -d --build --no-deps wa-bot`. Ask "reply to Sam's email saying yes" and the bot shows the exact To, subject and body; it sends only after you type `yes` (15 min expiry, `EMAIL_DAILY_LIMIT` default 5 per 24h, `/email` shows or cancels it). If it read email in that chat and the address is not the sender you're replying to or a saved contact, it warns you and you must type `yes <address>`.
 Note: Google treats `gmail.readonly` as a restricted scope. For personal use you can click through the "unverified app" warning, but public verification needs a security assessment.
 
 ## Backup

@@ -109,20 +109,45 @@ async function importVcards(text) {
 }
 
 // ---------- birthdays ----------
+const isLeap = (y) => (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
+// When the birthday falls in year y as UTC ms. A Feb 29 birthday is kept on Feb 28 in non-leap years.
+const celebrationUtc = (y, mo, d) => Date.UTC(y, mo - 1, mo === 2 && d === 29 && !isLeap(y) ? 28 : d);
+const ymdUtc = (ms) => new Date(ms).toISOString().slice(0, 10);
+const todayParts = () => new Date().toLocaleDateString('en-CA', { timeZone: TZ }).split('-').map(Number);
+
 async function upcomingBirthdays(withinDays = 7) {
-  const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: TZ });
-  const [y, m, d] = todayStr.split('-').map(Number);
+  const [y, m, d] = todayParts();
   const todayUtc = Date.UTC(y, m - 1, d);
   const out = [];
   for (const c of await allContacts()) {
     const b = /^(?:(\d{4})|-)-(\d{2})-(\d{2})$/.exec(c.birthday || '');
     if (!b) continue;
-    let next = Date.UTC(y, Number(b[2]) - 1, Number(b[3]));
-    if (next < todayUtc) next = Date.UTC(y + 1, Number(b[2]) - 1, Number(b[3]));
+    let next = celebrationUtc(y, Number(b[2]), Number(b[3]));
+    if (next < todayUtc) next = celebrationUtc(y + 1, Number(b[2]), Number(b[3]));
     const inDays = Math.round((next - todayUtc) / 86_400_000);
     if (inDays <= withinDays) out.push({ name: c.name, inDays, turning: b[1] ? new Date(next).getUTCFullYear() - Number(b[1]) : null });
   }
   return out.sort((a, b) => a.inDays - b.inDays);
 }
 
-module.exports = { saveContact, findContact, importVcards, upcomingBirthdays };
+// Pure: contacts (as from allContacts) whose birthday is celebrated on the given YYYY-MM-DD.
+// Age is only given when the year is known and sensible; Feb 29 people are celebrated on Feb 28 in non-leap years.
+function birthdaysOn(list, ymd) {
+  const [y, mo, d] = ymd.split('-').map(Number);
+  const out = [];
+  for (const c of list) {
+    const b = /^(?:(\d{4})|-)-(\d{2})-(\d{2})$/.exec(c.birthday || '');
+    if (!b || ymdUtc(celebrationUtc(y, Number(b[2]), Number(b[3]))) !== ymd) continue;
+    const age = b[1] ? y - Number(b[1]) : null;
+    out.push({ name: c.name, turning: age && age > 0 && age < 130 ? age : null, year: y });
+  }
+  return out;
+}
+
+// Birthdays tomorrow (owner's timezone), for the evening-before reminder.
+async function birthdaysTomorrow() {
+  const [y, m, d] = todayParts();
+  return birthdaysOn(await allContacts(), ymdUtc(Date.UTC(y, m - 1, d + 1)));
+}
+
+module.exports = { saveContact, findContact, allContacts, importVcards, upcomingBirthdays, birthdaysOn, birthdaysTomorrow };

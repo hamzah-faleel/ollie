@@ -4,12 +4,15 @@ const CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
 const REFRESH_TOKEN = process.env.GOOGLE_REFRESH_TOKEN;
 
 const enabled = () => Boolean(CLIENT_ID && CLIENT_SECRET && REFRESH_TOKEN);
+// Tests only (scripts/test-mock.js): send every Google request to a local fake server instead.
+const TEST_BASE = (process.env.GOOGLE_TEST_BASE_URL || '').replace(/\/$/, '');
+const target = (url) => (TEST_BASE ? url.replace(/^https:\/\/[a-z0-9.-]+\.googleapis\.com/, TEST_BASE) : url);
 
 let cached = { token: null, exp: 0 };
 
 async function accessToken() {
   if (cached.token && Date.now() < cached.exp - 60_000) return cached.token;
-  const res = await fetch('https://oauth2.googleapis.com/token', {
+  const res = await fetch(target('https://oauth2.googleapis.com/token'), {
     method: 'POST',
     body: new URLSearchParams({ client_id: CLIENT_ID, client_secret: CLIENT_SECRET, refresh_token: REFRESH_TOKEN, grant_type: 'refresh_token' }),
   });
@@ -24,7 +27,7 @@ async function accessToken() {
 
 // JSON request to a Google API. Retries once with a fresh token on 401.
 async function api(url, { method = 'GET', body } = {}, retried = false) {
-  const res = await fetch(url, {
+  const res = await fetch(target(url), {
     method,
     headers: { Authorization: `Bearer ${await accessToken()}`, ...(body ? { 'Content-Type': 'application/json' } : {}) },
     body: body ? JSON.stringify(body) : undefined,

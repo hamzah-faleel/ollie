@@ -5,11 +5,13 @@
 const crypto = require('crypto');
 const readline = require('readline/promises');
 
-// gmail.readonly + gmail.compose = read mail and create drafts; the bot can never send.
+// gmail.readonly + gmail.compose = read mail and create drafts. gmail.send is only used by mailout.js, and only when
+// GMAIL_SEND_ENABLED=true and the owner types yes to each email. Tokens made before gmail.send was added can't send.
 const SCOPES = [
   'https://www.googleapis.com/auth/calendar.events',
   'https://www.googleapis.com/auth/gmail.readonly',
   'https://www.googleapis.com/auth/gmail.compose',
+  'https://www.googleapis.com/auth/gmail.send',
 ];
 const REDIRECT = 'http://127.0.0.1:8085';
 

@@ -79,6 +79,7 @@ async function createDraft({ to, text }, ctx) {
   if (r.error) return r;
   if (OWNERS.includes(r.digits)) return { error: "That's the owner's own number. Just tell them directly." };
   db.prepare("UPDATE outbox SET status = 'cancelled' WHERE owner_chat = ? AND status = 'draft'").run(ctx.chatId);
+  require('./mailout').discard(ctx.chatId); // only one pending "yes" at a time: a new WhatsApp draft replaces a waiting email
   db.prepare('INSERT INTO outbox (owner_chat, session_id, to_name, to_chat, text, created_at) VALUES (?, ?, ?, ?, ?, ?)')
     .run(ctx.chatId, ctx.sessionId, r.name, r.chatId, text, Date.now());
   return { ok: true, status: 'draft_awaiting_owner_confirmation', to: String(to).trim(), note: 'NOT sent. The system shows the owner the draft and sends only after they reply yes. Do not say it was sent.' };
