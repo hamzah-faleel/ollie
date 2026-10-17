@@ -12,7 +12,7 @@ Ollie is a single-user AI secretary I talk to on WhatsApp. I send a text or a vo
 - Only answers the owner's number.
 - Self-hosted with Docker on an Oracle Cloud ARM server.
 
-Built with AI assistance (Claude Code). Licensed under MIT.
+Built with AI assistance. Licensed under MIT.
 
 ---
 
