@@ -1,0 +1,381 @@
+<title>Ollie Guide</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a calm reference sheet. Sticky tab bar, one panel at a time. Green-slate palette, amber only for warnings. */
+:root {
+  --bg: #f3f6f4; --surface: #ffffff; --ink: #17211d; --muted: #566660; --line: #d6dfda;
+  --accent: #0d6e5e; --accent-ink: #ffffff; --accent-soft: #dcefe9; --warn: #8a5a00; --warn-soft: #fbefd2;
+  --code-bg: #e9efec; --ok: #1d7a43;
+  --sans: "Instrument Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0f1613; --surface: #17211d; --ink: #e6efea; --muted: #9fb0a8; --line: #2a3832;
+  --accent: #4fc3a8; --accent-ink: #06201a; --accent-soft: #1a3a32; --warn: #f0c25a; --warn-soft: #3a2e12;
+  --code-bg: #0b100e; --ok: #5bd18a; color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #0f1613; --surface: #17211d; --ink: #e6efea; --muted: #9fb0a8; --line: #2a3832;
+  --accent: #4fc3a8; --accent-ink: #06201a; --accent-soft: #1a3a32; --warn: #f0c25a; --warn-soft: #3a2e12;
+  --code-bg: #0b100e; --ok: #5bd18a; color-scheme: dark; }
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font: 400 16px/1.6 var(--sans); margin: 0;
+  padding-block: 0 56px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.wrap { max-width: 860px; margin: 0 auto; }
+header { padding-block: 40px 20px; }
+h1 { font-size: clamp(2rem, 6vw, 3rem); line-height: 1.05; margin: 0 0 12px; letter-spacing: -0.02em; text-wrap: balance; }
+h2 { font-size: 1.4rem; margin: 40px 0 8px; letter-spacing: -0.01em; text-wrap: balance; }
+h3 { font-size: 1.05rem; margin: 24px 0 6px; }
+p { margin: 0 0 12px; max-width: 68ch; }
+.lead { font-size: 1.15rem; color: var(--muted); max-width: 60ch; }
+a { color: var(--accent); }
+nav { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--bg); border-bottom: 1px solid var(--line); margin-inline: calc(-1 * max(16px, env(safe-area-inset-left, 0px))); padding-inline: max(16px, env(safe-area-inset-left, 0px)); }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--bg); }
+.tabs { display: flex; gap: 4px; overflow-x: auto; max-width: 860px; margin: 0 auto; padding-block: 8px; }
+.tab { font: 600 0.95rem var(--sans); color: var(--muted); background: none; border: 0; padding: 8px 14px; border-radius: 8px; cursor: pointer; white-space: nowrap; }
+.tab[aria-selected="true"] { background: var(--accent); color: var(--accent-ink); }
+.tab:focus-visible, button:focus-visible, input:focus-visible, summary:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+section[hidden] { display: none; }
+.flow { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 16px 0 8px; padding: 0; list-style: none; }
+.flow li { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; font-weight: 600; font-size: 0.92rem; }
+.flow li + li::before { content: "\2192"; color: var(--muted); margin-right: 10px; font-weight: 400; }
+.flow li + li { border-left: 0; }
+.two { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin-top: 12px; }
+.two > div { min-width: 0; }
+.box { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+.box h3 { margin-top: 0; }
+.box ul { margin: 0; padding-left: 1.1rem; } .box li { margin: 4px 0; }
+.note { background: var(--warn-soft); color: var(--ink); border-left: 4px solid var(--warn); padding: 10px 14px; border-radius: 6px; margin: 16px 0; max-width: 68ch; }
+.note b { color: var(--warn); }
+code, pre { font-family: var(--mono); font-size: 0.86rem; }
+code { background: var(--code-bg); padding: 1px 6px; border-radius: 4px; }
+.code { position: relative; margin: 10px 0 16px; }
+pre { margin: 0; background: var(--code-bg); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; overflow-x: auto; }
+.copy { position: absolute; top: 8px; right: 8px; font: 600 0.78rem var(--sans); background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+.progress { display: flex; align-items: center; gap: 12px; margin: 12px 0 4px; }
+.bar { flex: 1; height: 8px; background: var(--line); border-radius: 99px; overflow: hidden; }
+.bar > i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+.step { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; margin: 10px 0; }
+.step > summary { cursor: pointer; padding: 12px 16px; font-weight: 600; display: flex; gap: 12px; align-items: center; list-style: none; }
+.step > summary::-webkit-details-marker { display: none; }
+.step input[type=checkbox] { width: 20px; height: 20px; accent-color: var(--accent); flex: none; }
+.step .body { padding: 0 16px 6px 48px; }
+.step[data-done="1"] > summary span { color: var(--muted); text-decoration: line-through; }
+.search { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.search input { flex: 1 1 220px; min-width: 0; font: 400 1rem var(--sans); padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); }
+.chip { font: 600 0.85rem var(--sans); border: 1px solid var(--line); background: var(--surface); color: var(--ink); border-radius: 99px; padding: 6px 12px; cursor: pointer; }
+.chip[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--ink); }
+.cmds { display: grid; gap: 8px; }
+.cmd { display: grid; grid-template-columns: minmax(120px, 190px) 1fr; gap: 4px 16px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; }
+.cmd code { background: none; padding: 0; color: var(--accent); font-weight: 500; overflow-wrap: anywhere; }
+.cmd p { margin: 0; } .cmd small { color: var(--muted); display: block; }
+.empty { color: var(--muted); padding: 16px 0; }
+.table { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; min-width: 560px; font-size: 0.92rem; }
+th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; font-size: 0.8rem; letter-spacing: .05em; text-transform: uppercase; }
+tr:last-child td { border-bottom: 0; }
+.tag { font: 600 0.72rem var(--sans); letter-spacing: .04em; text-transform: uppercase; padding: 2px 8px; border-radius: 99px; background: var(--accent-soft); }
+.tag.opt { background: var(--code-bg); color: var(--muted); }
+details.fix { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; margin: 8px 0; padding: 0 16px; }
+details.fix summary { cursor: pointer; padding: 12px 0; font-weight: 600; }
+details.fix p { margin-bottom: 14px; }
+footer { margin-top: 48px; color: var(--muted); font-size: 0.88rem; }
+@media (max-width: 520px) { .cmd { grid-template-columns: 1fr; } .step .body { padding-left: 16px; } }
+@media (prefers-reduced-motion: reduce) { .bar > i { transition: none; } }
+</style>
+
+<div class="wrap">
+<header>
+  <h1>Ollie, a secretary that lives in WhatsApp</h1>
+  <p class="lead">You text it or send a voice note. It keeps your reminders, notes and calendar, watches for messages you shouldn't miss, and drafts replies you approve with a typed "yes". It runs on your own server and answers only you.</p>
+</header>
+
+<nav aria-label="Guide sections"><div class="tabs" role="tablist">
+  <button class="tab" role="tab" id="t-start" aria-controls="p-start" data-tab="start">Start here</button>
+  <button class="tab" role="tab" id="t-setup" aria-controls="p-setup" data-tab="setup">Set it up</button>
+  <button class="tab" role="tab" id="t-cmds" aria-controls="p-cmds" data-tab="cmds">Commands</button>
+  <button class="tab" role="tab" id="t-safe" aria-controls="p-safe" data-tab="safe">Privacy and safety</button>
+  <button class="tab" role="tab" id="t-fix" aria-controls="p-fix" data-tab="fix">When it breaks</button>
+</div></nav>
+
+<!-- START -->
+<section id="p-start" role="tabpanel" aria-labelledby="t-start">
+  <h2>How a message travels</h2>
+  <ol class="flow"><li>Your WhatsApp</li><li>OpenWA gateway</li><li>The bot</li><li>AI model + tools</li><li>Reply</li></ol>
+  <p>OpenWA is a separate self-hosted program that connects to WhatsApp. It forwards each message to the bot over a signed webhook. The bot ignores every number except yours, asks an AI model what to do, runs the tools it picks (a reminder, a note, a calendar entry) and answers through OpenWA. Voice notes are turned into text first.</p>
+
+  <h2>Things to try first</h2>
+  <div class="two">
+    <div class="box"><h3>Talk to it</h3><ul>
+      <li>"Remind me to call the bank tomorrow at 10"</li>
+      <li>"Save a note: ideas for the club poster"</li>
+      <li>"What's on my calendar this week?"</li>
+      <li>Send a voice note instead of typing</li>
+      <li>"Message Sam: running 10 minutes late". It shows you the draft and sends only after you reply <code>yes</code>.</li></ul></div>
+    <div class="box"><h3>Ask it to look after things</h3><ul>
+      <li><code>/briefing</code> a morning summary: calendar, weather, tasks, birthdays</li>
+      <li><code>/wrap</code> an evening wrap-up with tomorrow's plan</li>
+      <li><code>/pending</code> who is still waiting for your reply</li>
+      <li><code>/alerts</code> what it flagged as urgent</li></ul></div>
+  </div>
+
+  <h2>What you need</h2>
+  <div class="two">
+    <div class="box"><h3>Required</h3><ul>
+      <li>A small always-on Linux server with Docker</li>
+      <li>A WhatsApp number for the bot (a spare SIM works)</li>
+      <li>An AI key: OpenRouter, or Gemini</li>
+      <li>A Groq key if you want voice notes understood</li></ul></div>
+    <div class="box"><h3>Optional</h3><ul>
+      <li>Google account access for Calendar and Gmail</li>
+      <li>A second, read-only link to your own WhatsApp for the inbox, unread and alert features</li>
+      <li>A private GitHub repo to back up your notes</li></ul></div>
+  </div>
+  <div class="note"><b>Costs.</b> The software is free. You pay for the server (a free-tier VM works) and for AI usage by the token. Use low-cost models, set <code>DAILY_SPEND_LIMIT_USD</code>, and check <code>/usage</code> now and then.</div>
+</section>
+
+<!-- SETUP -->
+<section id="p-setup" role="tabpanel" aria-labelledby="t-setup" hidden>
+  <h2>Set it up</h2>
+  <p>Tick each step as you finish it. Your progress stays in this browser.</p>
+  <div class="progress"><div class="bar"><i id="barfill"></i></div><span id="barlabel">0 of 7 done</span></div>
+
+  <details class="step" data-id="s1" open><summary><input type="checkbox" aria-label="Step 1 done"><span>1. Get a server and Docker</span></summary><div class="body">
+    <p>Any Linux server with Docker and Docker Compose will do. ARM works. Keep ports closed to the internet except what you already use for SSH.</p></div></details>
+
+  <details class="step" data-id="s2"><summary><input type="checkbox" aria-label="Step 2 done"><span>2. Run OpenWA and link the bot's WhatsApp</span></summary><div class="body">
+    <p>Install <a href="https://github.com/rmyndharis/OpenWA" target="_blank" rel="noopener">OpenWA</a> from its repository and start it with Docker. Create one session for the bot, open its QR code, and scan it from the bot's phone under Linked devices. Note the session id and create an API key for it.</p>
+    <p>In OpenWA's own <code>.env</code> add these two lines so it can reach the bot and read contact numbers:</p>
+    <div class="code"><pre>SSRF_ALLOWED_HOSTS=wa-bot
+RESOLVE_LID_TO_PHONE=true</pre><button class="copy">Copy</button></div></div></details>
+
+  <details class="step" data-id="s3"><summary><input type="checkbox" aria-label="Step 3 done"><span>3. Get the bot and fill in its settings</span></summary><div class="body">
+    <p>Put the bot's folder next to OpenWA (for example <code>~/OpenWA/wa-bot</code>), then copy the example settings file and edit it:</p>
+    <div class="code"><pre>cd ~/OpenWA/wa-bot
+cp .env.example .env
+nano .env</pre><button class="copy">Copy</button></div>
+    <p>The settings that matter most:</p>
+    <div class="table"><table>
+      <tr><th>Setting</th><th></th><th>What to put</th></tr>
+      <tr><td><code>OPENWA_URL</code></td><td><span class="tag">Required</span></td><td><code>http://openwa-api:2785</code></td></tr>
+      <tr><td><code>OPENWA_API_KEY</code></td><td><span class="tag">Required</span></td><td>The API key you made for the bot's session</td></tr>
+      <tr><td><code>WEBHOOK_SECRET</code></td><td><span class="tag">Required</span></td><td>A long random string (16+ characters). You reuse it in step 5.</td></tr>
+      <tr><td><code>OWNER_NUMBERS</code></td><td><span class="tag">Required</span></td><td>Your own number, digits only with country code. The bot answers only this.</td></tr>
+      <tr><td><code>AI_PROVIDER</code></td><td><span class="tag">Required</span></td><td><code>openrouter</code> (or <code>gemini</code>) with its key: <code>OPENROUTER_API_KEY</code> / <code>GEMINI_API_KEY</code></td></tr>
+      <tr><td><code>GROQ_API_KEY</code></td><td><span class="tag opt">Optional</span></td><td>Lets it understand voice notes</td></tr>
+      <tr><td><code>TZ</code></td><td><span class="tag opt">Optional</span></td><td>Your timezone, for example <code>Asia/Colombo</code></td></tr>
+      <tr><td><code>DAILY_SPEND_LIMIT_USD</code></td><td><span class="tag opt">Optional</span></td><td>A daily cap so a bug can't run up a bill</td></tr>
+      <tr><td><code>BRIEFING_TIME</code>, <code>WRAP_TIME</code></td><td><span class="tag opt">Optional</span></td><td>When the morning and evening summaries arrive</td></tr>
+    </table></div>
+    <div class="note"><b>Never share or commit <code>.env</code>.</b> It holds your keys. It is already ignored by git.</div></div></details>
+
+  <details class="step" data-id="s4"><summary><input type="checkbox" aria-label="Step 4 done"><span>4. Add the bot to Docker Compose</span></summary><div class="body">
+    <p>In the OpenWA folder, create <code>docker-compose.override.yml</code> so one command starts both:</p>
+    <div class="code"><pre>services:
+  wa-bot:
+    build: ./wa-bot
+    container_name: wa-bot
+    restart: unless-stopped
+    env_file: ./wa-bot/.env
+    volumes:
+      - wa-bot-data:/data
+    networks:
+      - openwa-network
+    depends_on:
+      - openwa-api
+
+volumes:
+  wa-bot-data:</pre><button class="copy">Copy</button></div>
+    <p>The <code>wa-bot-data</code> volume holds the database and your notes, so they survive rebuilds.</p></div></details>
+
+  <details class="step" data-id="s5"><summary><input type="checkbox" aria-label="Step 5 done"><span>5. Tell OpenWA where to send messages</span></summary><div class="body">
+    <p>Register a webhook on the bot's session. Use the same secret as <code>WEBHOOK_SECRET</code>. Messages without a valid signature are rejected.</p>
+    <div class="code"><pre>curl -X POST http://127.0.0.1:2785/api/sessions/&lt;bot session id&gt;/webhooks \
+  -H "X-API-Key: &lt;bot api key&gt;" -H "Content-Type: application/json" \
+  -d '{"url":"http://wa-bot:3000/webhook","events":["message.received"],"secret":"&lt;WEBHOOK_SECRET&gt;"}'</pre><button class="copy">Copy</button></div></div></details>
+
+  <details class="step" data-id="s6"><summary><input type="checkbox" aria-label="Step 6 done"><span>6. Build and start</span></summary><div class="body">
+    <div class="code"><pre>cd ~/OpenWA
+docker compose up -d --build wa-bot
+docker logs -f wa-bot</pre><button class="copy">Copy</button></div>
+    <p>You should see a line saying the bot is listening on port 3000.</p>
+    <div class="note"><b>When you rebuild later,</b> always add <code>--no-deps</code> (<code>docker compose up -d --build --no-deps wa-bot</code>). Without it, OpenWA restarts too and every linked WhatsApp session disconnects.</div></div></details>
+
+  <details class="step" data-id="s7"><summary><input type="checkbox" aria-label="Step 7 done"><span>7. Say hello</span></summary><div class="body">
+    <p>From your own number, message the bot "hello", then send <code>/help</code>. If it answers, you are done. Next, turn on the extras you want from the table below.</p></div></details>
+
+  <h2>Extras, one at a time</h2>
+  <div class="table"><table>
+    <tr><th>Feature</th><th>What it adds</th><th>How to turn it on</th></tr>
+    <tr><td>Google Calendar</td><td>Read and add events, <code>/today</code></td><td>Create a Google OAuth client, set <code>GOOGLE_CLIENT_ID</code> and <code>GOOGLE_CLIENT_SECRET</code>, then run <code>docker exec -it wa-bot node google-auth.js</code></td></tr>
+    <tr><td>Gmail</td><td>Search, read, save drafts</td><td><code>GMAIL_ENABLED=true</code>, then run <code>google-auth.js</code> again</td></tr>
+    <tr><td>Sending email</td><td>Sends only after you type yes to the exact email</td><td><code>GMAIL_SEND_ENABLED=true</code> and authorize again</td></tr>
+    <tr><td>Your inbox, unread and alerts</td><td>Read-only view of your own WhatsApp</td><td>Link your personal number as a second session, set <code>PERSONAL_SESSION_ID</code> and a read-only <code>OPENWA_PERSONAL_KEY</code>, register a webhook on it</td></tr>
+    <tr><td>Notes backup</td><td>Sync your Markdown notes to a private repo</td><td><code>VAULT_GIT_REMOTE</code></td></tr>
+  </table></div>
+</section>
+
+<!-- COMMANDS -->
+<section id="p-cmds" role="tabpanel" aria-labelledby="t-cmds" hidden>
+  <h2>Commands</h2>
+  <p>Send any of these to the bot on WhatsApp. <code>/help</code> shows the same menu, and <code>/help alerts</code> (or messages, people, brain, day, ai) explains a group.</p>
+  <div class="search">
+    <input id="q" type="search" placeholder="Search commands, for example reminder or unread" aria-label="Search commands">
+  </div>
+  <div class="search" id="chips" role="group" aria-label="Filter by group"></div>
+  <div class="cmds" id="cmdlist"></div>
+  <p class="empty" id="none" hidden>No command matches that. Try a shorter word.</p>
+</section>
+
+<!-- SAFETY -->
+<section id="p-safe" role="tabpanel" aria-labelledby="t-safe" hidden>
+  <h2>What it will and won't do</h2>
+  <div class="two">
+    <div class="box"><h3>It will not</h3><ul>
+      <li>Answer anyone but the numbers in <code>OWNER_NUMBERS</code></li>
+      <li>Send a message or email without you typing <code>yes</code> to the exact text</li>
+      <li>Reply from your personal WhatsApp. That link is read-only and every write is refused in code.</li>
+      <li>Chat with strangers on its own. AI chat with an outside person starts only after you run <code>/allow</code>.</li>
+      <li>Mark your chats as read</li></ul></div>
+    <div class="box"><h3>It does</h3><ul>
+      <li>Hide names, numbers and emails from the AI behind placeholders, and put them back in its answer (<code>/pseudo</code>)</li>
+      <li>Use AI providers on zero-data-retention routing for private text</li>
+      <li>Keep chat-derived notes in a private folder the AI cannot read</li>
+      <li>Cap daily spend and email and message counts</li></ul></div>
+  </div>
+  <h2>Why messages from other people are treated carefully</h2>
+  <p>Anything another person writes, in a chat or an email, could contain instructions meant to trick an AI. So that text only ever goes to a model that has no tools, which can summarize but can't send, delete or search. Email recipients are checked in code: after the bot reads an email, it will only offer to send to the person who wrote it or to someone in your contacts, and anything else needs you to type <code>yes</code> followed by the address.</p>
+  <div class="note"><b>Keep it that way.</b> If you extend the bot, never pass text from outside people to a model that can use tools.</div>
+  <h2>Good habits</h2>
+  <ul>
+    <li>Keep <code>.env</code> private and rotate a key if it ever leaks.</li>
+    <li>Check <code>/usage</code> weekly while you are getting started.</li>
+    <li>Start with the read-only features. Turn on sending last.</li>
+  </ul>
+</section>
+
+<!-- FIX -->
+<section id="p-fix" role="tabpanel" aria-labelledby="t-fix" hidden>
+  <h2>When it breaks</h2>
+  <details class="fix"><summary>The bot doesn't answer at all</summary>
+    <p>Run <code>docker logs --tail 50 wa-bot</code>. Check that your number is in <code>OWNER_NUMBERS</code> (digits only), that the webhook secret matches on both sides, and that the bot's session is <code>ready</code> in OpenWA.</p></details>
+  <details class="fix"><summary>Everything stopped after I restarted OpenWA</summary>
+    <p>A restart disconnects every linked session. Start the bot's session again in OpenWA, and the personal one too if you use it. Rebuilding the bot with <code>--no-deps</code> avoids this.</p></details>
+  <details class="fix"><summary>It says it can't reach the AI, or credit ran out</summary>
+    <p>Check the key in <code>.env</code> and your balance with the provider. <code>/usage</code> shows what it spent today. If you hit the daily cap, raise <code>DAILY_SPEND_LIMIT_USD</code>.</p></details>
+  <details class="fix"><summary>Voice notes aren't understood</summary>
+    <p>Add <code>GROQ_API_KEY</code> to <code>.env</code> and rebuild.</p></details>
+  <details class="fix"><summary>The notes can't be updated (permission denied)</summary>
+    <p>Files in the <code>wa-bot-data</code> volume must belong to the bot's user. If you copied notes in by hand, fix the owner with <code>docker exec -u root wa-bot chown -R 1000:1000 /data/vault</code>.</p></details>
+  <details class="fix"><summary>Alerts or unread show nothing</summary>
+    <p>These need the personal session and its webhook to include <code>message.received</code>, <code>message.sent</code> and <code>call.missed</code>. Check <code>/watch</code> for what is being watched and your quiet hours.</p></details>
+  <details class="fix"><summary>Run the tests before changing code</summary>
+    <p>There is no Node on the host, so use Docker: <code>docker run --rm -v "$PWD":/app -w /app node:22-alpine node --disable-warning=ExperimentalWarning scripts/test-mock.js</code></p></details>
+  <footer>Built with Node 22 built-ins only, no packages to install. Notes are plain Markdown files you can also open in Obsidian.</footer>
+</section>
+</div>
+
+<script>
+(function () {
+  var tabs = Array.prototype.slice.call(document.querySelectorAll('.tab'));
+  function show(id) {
+    if (!document.getElementById('p-' + id)) id = 'start';
+    tabs.forEach(function (t) { t.setAttribute('aria-selected', String(t.dataset.tab === id)); });
+    ['start', 'setup', 'cmds', 'safe', 'fix'].forEach(function (k) { document.getElementById('p-' + k).hidden = k !== id; });
+    try { history.replaceState(null, '', '#' + id); } catch (e) {}
+    window.scrollTo(0, 0);
+  }
+  tabs.forEach(function (t) { t.addEventListener('click', function () { show(t.dataset.tab); }); });
+  show((location.hash || '').replace('#', '') || 'start');
+
+  /* copy buttons */
+  document.querySelectorAll('.copy').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var text = b.parentNode.querySelector('pre').innerText;
+      function done(ok) { b.textContent = ok ? 'Copied' : 'Select and copy'; setTimeout(function () { b.textContent = 'Copy'; }, 1600); }
+      try { navigator.clipboard.writeText(text).then(function () { done(true); }, function () { sel(); }); } catch (e) { sel(); }
+      function sel() { var r = document.createRange(); r.selectNodeContents(b.parentNode.querySelector('pre')); var s = getSelection(); s.removeAllRanges(); s.addRange(r); done(false); }
+    });
+  });
+
+  /* setup checklist, remembered per browser */
+  var KEY = 'ollie-guide-steps', saved = {};
+  try { saved = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch (e) {}
+  var steps = Array.prototype.slice.call(document.querySelectorAll('.step'));
+  function paint() {
+    var n = 0;
+    steps.forEach(function (s) { var on = !!saved[s.dataset.id]; s.dataset.done = on ? '1' : '0'; s.querySelector('input').checked = on; if (on) n++; });
+    document.getElementById('barfill').style.width = (n / steps.length * 100) + '%';
+    document.getElementById('barlabel').textContent = n + ' of ' + steps.length + ' done';
+  }
+  steps.forEach(function (s) {
+    var box = s.querySelector('input');
+    box.addEventListener('click', function (e) { e.stopPropagation(); });
+    box.addEventListener('change', function () {
+      saved[s.dataset.id] = box.checked;
+      try { localStorage.setItem(KEY, JSON.stringify(saved)); } catch (e) {}
+      paint();
+    });
+  });
+  paint();
+
+  /* commands */
+  var CMDS = [
+    ['Messages', '/unread', 'Chats you have not opened: count, age and a short preview. It never marks anything read.'],
+    ['Messages', '/pending', 'Chats waiting for your reply, skipping ones that ended with "ok" or "thanks".'],
+    ['Messages', '/inbox [name]', 'AI digest of your personal WhatsApp, or of one person.'],
+    ['Messages', '/forward replies|all|off', 'Pass messages sent to the bot\'s number on to you.'],
+    ['Messages', '/email [cancel]', 'Show or cancel the email waiting for your yes.'],
+    ['Alerts', '/alerts', 'Open alerts and the ones you acknowledged recently.'],
+    ['Alerts', '/ack', 'Acknowledge alerts. Any message from you does this too.'],
+    ['Alerts', '/vip add <name>', 'Mark someone as a VIP so their messages get extra attention.'],
+    ['Alerts', '/watch [now]', 'What is watched, your quiet hours, or run the check now.'],
+    ['Alerts', '/triage on|off', 'Let the AI judge which unanswered messages are really urgent. Off by default.'],
+    ['Alerts', '/callme', 'Test the phone-call alert, if you set one up.'],
+    ['Second brain', '/memory [run]', 'Nightly update of private notes about the people you talk to, or run it now.'],
+    ['Second brain', '/rel', 'Sort people into family, friend, classmate, work and so on.'],
+    ['Second brain', '/graph', 'An interactive map of your notes.'],
+    ['Second brain', '/notes', 'Your ten most recent notes.'],
+    ['New people', '/intake on|off', 'Ask new numbers four fixed questions. No AI. Off by default.'],
+    ['New people', '/people', 'Everyone who has messaged the bot and where they stand.'],
+    ['New people', '/allow <name>', 'Let the AI chat with that person, with strict limits.'],
+    ['New people', '/deny <name>', 'Say no to that person.'],
+    ['Your day', '/today', 'Today\'s calendar and reminders.'],
+    ['Your day', '/tasks', 'Your to-do list.'],
+    ['Your day', '/reminders', 'Upcoming reminders.'],
+    ['Your day', '/weather', 'The forecast for your place.'],
+    ['Your day', '/briefing', 'The morning summary, on request.'],
+    ['Your day', '/wrap', 'The evening wrap-up, on request.'],
+    ['AI and cost', '/usage', 'Spend and tokens so far.'],
+    ['AI and cost', '/model [name|reset]', 'Show or switch the AI model.'],
+    ['AI and cost', '/pseudo on|off', 'Hide names, numbers and emails from the AI. On by default.'],
+    ['Other', '/voice', 'Switch voice replies to voice notes on or off.'],
+    ['Other', '/reset', 'Clear the bot\'s chat memory. Notes and reminders stay.'],
+    ['Other', '/help [topic]', 'The menu, or details on one group.']
+  ];
+  var groups = ['All'].concat(CMDS.map(function (c) { return c[0]; }).filter(function (g, i, a) { return a.indexOf(g) === i; }));
+  var active = 'All', chips = document.getElementById('chips'), list = document.getElementById('cmdlist'), q = document.getElementById('q');
+  groups.forEach(function (g) {
+    var b = document.createElement('button'); b.className = 'chip'; b.textContent = g; b.setAttribute('aria-pressed', String(g === active));
+    b.addEventListener('click', function () { active = g; Array.prototype.forEach.call(chips.children, function (c) { c.setAttribute('aria-pressed', String(c.textContent === g)); }); render(); });
+    chips.appendChild(b);
+  });
+  function render() {
+    var term = q.value.trim().toLowerCase(), shown = 0;
+    list.textContent = '';
+    CMDS.forEach(function (c) {
+      if (active !== 'All' && c[0] !== active) return;
+      if (term && (c[1] + ' ' + c[2] + ' ' + c[0]).toLowerCase().indexOf(term) < 0) return;
+      var d = document.createElement('div'); d.className = 'cmd';
+      var code = document.createElement('code'); code.textContent = c[1];
+      var p = document.createElement('p'); p.textContent = c[2];
+      var s = document.createElement('small'); s.textContent = c[0]; p.appendChild(s);
+      d.appendChild(code); d.appendChild(p); list.appendChild(d); shown++;
+    });
+    document.getElementById('none').hidden = shown > 0;
+  }
+  q.addEventListener('input', render);
+  render();
+})();
+</script>
