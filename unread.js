@@ -30,9 +30,10 @@ async function fetchChats() {
 }
 
 // Pure: a ChatSummary[] -> the unread list, oldest first. `incoming(chatId, n)` may supply stored incoming timestamps to age the oldest unread message.
-function parse(chats, { incoming = () => [], isVip = () => false, exclude = '' } = {}) {
+function parse(chats, { incoming = () => [], isVip = () => false, exclude = '', isBot = () => false } = {}) {
   const out = [];
   for (const c of chats || []) {
+    if (isBot(String(c.id))) continue;                                                    // the bot's own chat (may be an @lid id)
     if (exclude && /@(c\.us|s\.whatsapp\.net)$/.test(String(c.id)) && digits(String(c.id).split('@')[0]) === exclude) continue;   // the bot's own chat: never an unread reminder
     const count = Math.floor(Number(c.unreadCount));
     if (!(count > 0) || c.archived || SKIP_KINDS.includes(c.kind) || /@(broadcast|newsletter)$/.test(String(c.id)) || /^status@/.test(String(c.id))) continue;
@@ -75,7 +76,7 @@ ensureBot();
 
 async function list({ force = false, isVip } = {}) {
   const exclude = await ensureBot();
-  return parse(await chats(force), { incoming: storedIncoming, isVip, exclude });
+  return parse(await chats(force), { incoming: storedIncoming, isVip, exclude, isBot: inbox.isBotChat });
 }
 
 async function unreadText(limit = 15) {

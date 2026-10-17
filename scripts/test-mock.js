@@ -445,6 +445,15 @@ const check = (name, ok, info = '') => { console.log(`${ok ? 'PASS' : 'FAIL'}  $
     inboxB.setBotPhone('94700000099');
     inboxB.insertRaw({ msg_id: 'bot-own-1', chat_id: '94700000099@c.us', chat_name: 'Test Bot', sender: 'Test Bot', is_group: 0, ts: Date.now() - 3 * 3600_000, type: 'chat', text: 'Good evening, here is your wrap-up. Anything to add?', seen: 0, from_me: 0, phone: '94700000099' });
     check('the bot\'s own chat never shows as waiting for your reply', !inboxB.pending(1).items.some((i) => /Test Bot/.test(i.name)));
+    // Real shape: WhatsApp files the bot's chat under an @lid id; only the stored messages carry the bot's phone.
+    inboxB.setBotPhone('94700000077');
+    inboxB.insertRaw({ msg_id: 'bot-lid-1', chat_id: '900000000077@lid', chat_name: 'Test Ollie', sender: 'Test Ollie', is_group: 0, ts: Date.now() - 3 * 3600_000, type: 'chat', text: 'Reminder: your 3pm call is urgent, please reply asap', seen: 0, from_me: 0, phone: '94700000077' });
+    inboxB.insertRaw({ msg_id: 'human-lid-1', chat_id: '900000000078@lid', chat_name: 'Test Lid Human', sender: 'Test Lid Human', is_group: 0, ts: Date.now() - 3 * 3600_000, type: 'chat', text: 'can you send me the notes tomorrow?', seen: 0, from_me: 0, phone: '94700000078' });
+    check('the bot\'s @lid chat (matched by phone) is not in waiting-for-reply', !inboxB.pending(1).items.some((i) => /Test Ollie/.test(i.name)) && inboxB.pending(1).items.some((i) => /Test Lid Human/.test(i.name)));
+    check('isBotChat tells the @lid bot chat from a person', inboxB.isBotChat('900000000077@lid') && !inboxB.isBotChat('900000000078@lid') && !inboxB.isBotChat('900000000099@lid'));
+    const lidChats = [{ id: '900000000077@lid', name: 'Test Ollie', unreadCount: 3, timestamp: Math.floor(Date.now() / 1000) - 7200 }, { id: '900000000078@lid', name: 'Test Lid Human', unreadCount: 1, timestamp: Math.floor(Date.now() / 1000) - 7200 }];
+    check('the bot\'s @lid chat is left out of the unread list', unreadMod.parse(lidChats, { isBot: inboxB.isBotChat }).map((u) => u.name).join() === 'Test Lid Human');
+    { const ua = require('../alerts').unanswered(Date.now(), 24 * 3_600_000); check('alerts never consider the bot\'s @lid chat (but still see real people)', Array.isArray(ua) && !JSON.stringify(ua).includes('Test Ollie') && JSON.stringify(ua).includes('Test Lid Human'), JSON.stringify(ua).slice(0, 200)); }
     inboxB.setBotPhone('');
   }
   unreadOn = false;

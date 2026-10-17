@@ -123,6 +123,14 @@ async function refine(items) {
 // Only as good as the data: owner replies appear only if the personal webhook also sends message.sent (or history was fetched).
 let botDigits = digits(process.env.BOT_NUMBER || '');
 const setBotPhone = (p) => { botDigits = digits(p); };
+// The bot's own chat in the personal session. WhatsApp often files it under an internal @lid id, not the phone number, so besides a
+// plain number id this matches any chat with a stored message carrying the bot's phone (the webhook resolves LID -> phone).
+function isBotChat(chatId) {
+  if (!botDigits) return false;
+  const id = String(chatId || ''), tail = botDigits.slice(-9);
+  if (/@(c\.us|s\.whatsapp\.net)$/.test(id)) return digits(id.split('@')[0]).slice(-9) === tail;
+  return Boolean(db.prepare("SELECT 1 FROM inbox_messages WHERE chat_id = ? AND phone IS NOT NULL AND phone != '' AND substr(phone, -9) = ? LIMIT 1").get(id, tail));
+}
 
 function pending(minMinutes = Number(process.env.PENDING_MIN_MINUTES || 30), days = 7) {
   const now = Date.now();
@@ -133,7 +141,7 @@ function pending(minMinutes = Number(process.env.PENDING_MIN_MINUTES || 30), day
   const out = [];
   for (const list of byChat.values()) {
     const last = list[list.length - 1];
-    if (botDigits && digits(String(last.chat_id).split('@')[0]) === botDigits) continue;      // the bot's own chat is not a person waiting on you
+    if (isBotChat(last.chat_id)) continue;                                                      // the bot's own chat is not a person waiting on you
     if (last.from_me || now - last.ts < minMinutes * 60_000) continue;
     let verdict = needsReply(list.slice(-3));
     if (verdict === 'no') continue;
@@ -246,4 +254,4 @@ function clear() {
   return `Deleted ${n} stored message${n === 1 ? '' : 's'}.`;
 }
 
-module.exports = { needsReply, isCloser, refine, ingest, ingestBot, pending, setBotPhone, pendingText, insertRaw, purge, digest, about, status, clear, redact, digits };
+module.exports = { needsReply, isCloser, refine, ingest, ingestBot, pending, setBotPhone, isBotChat, pendingText, insertRaw, purge, digest, about, status, clear, redact, digits };

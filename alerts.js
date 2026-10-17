@@ -156,6 +156,7 @@ function unanswered(now = Date.now(), windowMs = 6 * 3_600_000) {
   const rows = db.prepare('SELECT msg_id, chat_id, chat_name, phone, from_me, ts, text, source FROM inbox_messages WHERE is_group = 0 AND ts > ? ORDER BY ts').all(now - windowMs);
   const byChat = new Map();
   for (const r of rows) (byChat.get(r.chat_id) || byChat.set(r.chat_id, []).get(r.chat_id)).push(r);
+  for (const id of [...byChat.keys()]) if (inbox.isBotChat(id)) byChat.delete(id);          // never alert about the bot's own chat
   const out = [];
   for (const list of byChat.values()) {
     const incoming = list.filter((r) => !r.from_me);
@@ -360,4 +361,4 @@ function vip(arg) {
   return `⭐ ${name || '+' + phone} is a VIP now.${phone ? '' : ' (matched by name only; a number is more reliable)'}`;
 }
 
-module.exports = { scanUnreadVips, init, tick, scanNow, raise, ack, list, status, callTest, vip, recordCall, triageCmd, triageMessages, parseTriage, isQuiet, callsEnabled, placeCall, deliver, scanMessages, scanMeetings };
+module.exports = { unanswered, scanUnreadVips, init, tick, scanNow, raise, ack, list, status, callTest, vip, recordCall, triageCmd, triageMessages, parseTriage, isQuiet, callsEnabled, placeCall, deliver, scanMessages, scanMeetings };
