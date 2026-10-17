@@ -35,16 +35,19 @@ function parse(chats, { incoming = () => [], isVip = () => false, exclude = '', 
   for (const c of chats || []) {
     if (isBot(String(c.id))) continue;                                                    // the bot's own chat (may be an @lid id)
     if (exclude && /@(c\.us|s\.whatsapp\.net)$/.test(String(c.id)) && digits(String(c.id).split('@')[0]) === exclude) continue;   // the bot's own chat: never an unread reminder
-    const count = Math.floor(Number(c.unreadCount));
+    const rawCount = Math.floor(Number(c.unreadCount));
+    const count = rawCount === -1 ? 1 : rawCount;                               // -1 = the chat was marked unread by hand
     if (!(count > 0) || c.archived || SKIP_KINDS.includes(c.kind) || /@(broadcast|newsletter)$/.test(String(c.id)) || /^status@/.test(String(c.id))) continue;
     const isGroup = Boolean(c.isGroup) || c.kind === 'group' || /@g\.us$/.test(String(c.id));
     if (isGroup && c.muted) continue;                                          // muted groups are noise by the owner's own choice
-    const last = tsMs(c.timestamp) || Date.now();
+    const ts0 = tsMs(c.timestamp);
+    const last = ts0 || Date.now();
     const stored = incoming(String(c.id), count);                              // newest first
+    const lastKey = ts0 || stored[0] || `n${count}`;                           // stable across scans even when the chat has no timestamp
     const since = stored.length >= count ? stored[count - 1] : last;           // oldest unread: Nth-newest stored incoming message, else the last message time
     const phone = /@(c\.us|s\.whatsapp\.net)$/.test(String(c.id)) ? digits(String(c.id).split('@')[0]) : '';
     const name = String(c.name || '').trim() || (phone ? `+${phone}` : String(c.id).split('@')[0]);
-    out.push({ id: String(c.id), name, count, isGroup, muted: Boolean(c.muted), last, since: Math.min(since, last), phone, preview: preview(c.lastMessage), vip: !isGroup && isVip(phone, name) });
+    out.push({ id: String(c.id), name, count, isGroup, muted: Boolean(c.muted), last, lastKey, since: Math.min(since, last), phone, preview: preview(c.lastMessage), vip: !isGroup && isVip(phone, name) });
   }
   return out.sort((a, b) => a.since - b.since);
 }

@@ -5,6 +5,7 @@
 // - Notes stay under Private/, so the tool-enabled assistant never sees them. Only 1:1 chats become notes; groups stay digest-only.
 const fs = require('fs/promises');
 const path = require('path');
+const crypto = require('crypto');
 const db = require('./db');
 const ai = require('./ai');
 const usage = require('./usage');
@@ -32,9 +33,19 @@ db.exec(`
     status TEXT NOT NULL DEFAULT 'pending',   -- pending | done | skip
     updated_at INTEGER
   );
+  -- consecutive rejected model answers per chat; after MAX_REJECTS the chat waits for new messages
+  CREATE TABLE IF NOT EXISTS memory_rejects (
+    chat_id TEXT PRIMARY KEY,
+    n INTEGER NOT NULL DEFAULT 0,
+    at INTEGER NOT NULL
+  );
 `);
+const MAX_REJECTS = 2;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const yieldLoop = () => new Promise(setImmediate); // let webhooks in between heavy steps (pseudonymizing a chunk is CPU work)
+// Logs never carry names, numbers or chat ids: a short hash is enough to follow one chat across log lines.
+const chatRef = (id) => crypto.createHash('sha256').update(String(id)).digest('hex').slice(0, 8);
 const digits = inbox.digits;
 
 // ---------- OpenWA (GET only) ----------
@@ -76,7 +87,7 @@ async function backfill(report) {
   for (const chat of todo) {
     let msgs;
     try { msgs = await get(`/sessions/${SESSION}/messages/${encodeURIComponent(chat.chat_id)}/history?deep=true&limit=${BACKFILL_MSGS}`); }
-    catch (e) { console.warn(`[memory] history ${chat.chat_id.split('@')[0]}: ${e.message}`); report.errors++; continue; }
+    catch (e) { console.warn(`[memory] history chat ${chatRef(chat.chat_id)}: ${e.message.replace(/\/messages\/[^/\s]+/, '/messages/<chat>')}`); report.errors++; continue; }
     msgs = msgs.filter((m) => m.type !== 'call' && m.type !== 'revoked' && (m.body || m.type));
     if (msgs.length < 3) { setStatus.run('skip', Date.now(), chat.chat_id); await sleep(PAUSE_MS / 3); continue; }
     const phone = await phoneOf(chat.chat_id);
@@ -142,10 +153,17 @@ If the new messages are only automated, business, promotional or one-way notific
 const fmtTime = (ts) => new Date(ts).toLocaleString('sv-SE', { timeZone: TZ }).slice(0, 16);
 const REQUIRED = ['## Snapshot', '## Open loops', '## Key moments'];
 
-function validBody(next, old) {
-  if (!next.startsWith('# ') || !REQUIRED.every((h) => next.includes(h)) || next.length > 12000) return false;
-  return !(old.length > 600 && next.length < old.length * 0.5); // a model that "forgot" most of the note must not overwrite it
+// null when the answer can replace the note, else a short reason code for the log (never the content).
+function rejectReason(next, old) {
+  if (!next.startsWith('# ')) return 'prefix';
+  const missing = REQUIRED.find((h) => !next.includes(h));
+  if (missing) return `heading:${missing.slice(3)}`;
+  if (next.length > 12000) return `too long ${next.length}`;
+  if (old.length > 600 && next.length < old.length * 0.5) return `shrink ${old.length}->${next.length}`; // a model that "forgot" most of the note must not overwrite it
+  return null;
 }
+// Models sometimes start with "Here is the updated note:" — drop anything before the first "# " heading line.
+const stripPreamble = (out) => { const k = out.search(/^# /m); return k > 0 ? out.slice(k) : out; };
 
 // ---------- consolidation ----------
 async function consolidate(report, spent) {
@@ -156,8 +174,19 @@ async function consolidate(report, spent) {
   if (!chats.length) return spent;
   const notes = await peopleNotes();
   const mark = db.prepare('UPDATE inbox_messages SET consolidated = 1 WHERE msg_id = ?');
+  const rejects = db.prepare('SELECT n, at FROM memory_rejects WHERE chat_id = ?');
+  const newSince = db.prepare('SELECT 1 FROM inbox_messages WHERE chat_id = ? AND consolidated = 0 AND stored_at > ? LIMIT 1');
+  const addReject = db.prepare('INSERT INTO memory_rejects (chat_id, n, at) VALUES (?, 1, ?) ON CONFLICT(chat_id) DO UPDATE SET n = n + 1, at = excluded.at');
+  const clearReject = db.prepare('DELETE FROM memory_rejects WHERE chat_id = ?');
 
   for (const chat of chats) {
+    // A chat whose answers were rejected MAX_REJECTS times in a row waits until new messages arrive, so it does not eat the budget every night.
+    const rj = rejects.get(chat.chat_id);
+    if (rj && rj.n >= MAX_REJECTS) {
+      if (!newSince.get(chat.chat_id, rj.at)) { report.parked = (report.parked || 0) + 1; continue; }
+      clearReject.run(chat.chat_id);
+    }
+    await yieldLoop();
     const rows = db.prepare('SELECT * FROM inbox_messages WHERE chat_id = ? AND consolidated = 0 ORDER BY ts').all(chat.chat_id);
     const name = rows.find((r) => !r.from_me)?.chat_name || rows[0].chat_name;
     const phone = rows.map((r) => r.phone).find(Boolean) || (/@(c\.us|s\.whatsapp\.net)$/.test(chat.chat_id) ? digits(chat.chat_id.split('@')[0]) : '');
@@ -177,14 +206,21 @@ async function consolidate(report, spent) {
       while (i < rows.length && size < CHUNK_CHARS) { chunk.push(rows[i]); size += rows[i].text.length + 30; i++; }
       if (spent + size + body.length > NIGHT_CHARS) { report.budgetStop = true; return spent; }
       if (usage.overLimit()) { report.limitStop = true; return spent; }
+      await yieldLoop();
       const user = `<existing_note>\n${body.trim() || '(none yet)'}\n</existing_note>\n<new_messages chat="${title}">\n`
         + chunk.map((r) => `[${fmtTime(r.ts)}] ${r.from_me ? 'Me' : name}: ${r.text}`).join('\n') + '\n</new_messages>';
       let out;
-      try { out = (await ai.untrusted(SYSTEM, user, 4096, claude.nightlyOn() ? { via: 'claude' } : {})).replace(/^```(?:markdown|md)?\n?|\n?```$/g, '').trim(); }
+      try { out = stripPreamble((await ai.untrusted(SYSTEM, user, 4096, claude.nightlyOn() ? { via: 'claude' } : {})).replace(/^```(?:markdown|md)?\n?|\n?```$/g, '').trim()); }
       catch (e) { console.warn('[memory] model call failed:', e.message); report.errors++; if (e instanceof ai.CreditError) report.creditStop = true; return spent; }
       spent += user.length;
-      if (out.toUpperCase() === 'SKIP') { chunk.forEach((r) => mark.run(r.msg_id)); report.skipped++; continue; }
-      if (!validBody(out, body)) { console.warn(`[memory] rejected model output for ${title}; messages kept for the next run`); report.rejected++; break; }
+      if (out.toUpperCase() === 'SKIP') { chunk.forEach((r) => mark.run(r.msg_id)); clearReject.run(chat.chat_id); report.skipped++; continue; }
+      const why = rejectReason(out, body);
+      if (why) {
+        addReject.run(chat.chat_id, Date.now());
+        console.warn(`[memory] rejected model output (${why}) chat ${chatRef(chat.chat_id)}; messages kept for the next run`);
+        report.rejected++; break;
+      }
+      clearReject.run(chat.chat_id);
 
       body = out;
       const last = new Date(chunk[chunk.length - 1].ts).toLocaleDateString('en-CA', { timeZone: TZ });
@@ -192,6 +228,8 @@ async function consolidate(report, spent) {
       fm = setFm(fm || 'private: true', {
         private: 'true', ...(phone ? { phone: `+${digits(phone)}` } : {}), ...(/^relationship:/m.test(fm) ? {} : { relationship: 'unsorted' }),
         last_contact: prev > last ? prev : last, source: `whatsapp-memory ${new Date().toLocaleDateString('en-CA', { timeZone: TZ })}`,
+        // a new note made only from messages to the BOT's number: its name was chosen by that person, so outbox.js won't resolve names from it
+        ...(!note && rows.every((r) => r.source === 'bot' || r.source === 'bot-auto') ? { origin: 'bot' } : {}),
       });
       await fs.mkdir(path.dirname(file), { recursive: true });
       await fs.writeFile(file, `---\n${fm}\n---\n${body.trim()}\n`);
@@ -206,7 +244,9 @@ async function consolidate(report, spent) {
 
 // ---------- run / schedule ----------
 let running = false;
-async function run() {
+// opts.day (nightly tick only): consolidation runs at most once per such day, so the 30-minute retries after a failed backfill
+// only retry the (free) history fetch instead of redoing paid model calls. A manual /memory run always consolidates.
+async function run(opts = {}) {
   if (running) return { already: true };
   if (!SESSION) return { disabled: 'PERSONAL_SESSION_ID is not set.' };
   running = true;
@@ -214,7 +254,11 @@ async function run() {
   try {
     inbox.purge();
     try { await backfill(report); } catch (e) { console.warn('[memory] backfill:', e.message); report.errors++; report.backfillError = e.message; }
-    await consolidate(report, 0);
+    if (opts.day && db.getKv('last_consolidate_day') === opts.day) report.consolidateDone = true;
+    else {
+      await consolidate(report, 0);
+      if (opts.day && !report.creditStop) db.setKv('last_consolidate_day', opts.day); // empty credit: retry once it is topped up
+    }
     if (report.created || report.updated) files.schedulePush('Memory update');
     const left = db.prepare('SELECT COUNT(*) n FROM inbox_messages WHERE consolidated = 0 AND is_group = 0').get().n;
     const pending = db.prepare("SELECT COUNT(*) n FROM memory_chats WHERE status = 'pending'").get().n;
@@ -231,6 +275,7 @@ const describe = (r) => r.disabled || (r.already ? 'A memory run is already in p
   + (r.budgetStop ? ' Stopped at tonight\'s budget; the rest continues next run.' : '')
   + (r.limitStop ? ' Stopped: daily AI spend limit reached.' : '') + (r.creditStop ? ' Stopped: AI credit ran out.' : '')
   + (r.rejected ? ` ${r.rejected} model answer${r.rejected === 1 ? ' was' : 's were'} rejected as incomplete and will be retried.` : '')
+  + (r.parked ? ` ${r.parked} chat${r.parked === 1 ? '' : 's'} with repeatedly rejected answers wait${r.parked === 1 ? 's' : ''} for new messages.` : '')
   + (r.backfillError ? (/not started|not ready/i.test(r.backfillError)
     ? " Older history couldn't be fetched because your personal WhatsApp session isn't running. Start it (dashboard > WhatsApp > Start); I'll retry every 30 minutes this morning."
     : ` Older history couldn't be fetched: ${String(r.backfillError).slice(0, 100)}.`) : '')
@@ -260,7 +305,7 @@ async function tick(notify) {
   if (Date.now() - Number(db.getKv('memory_try_at') || 0) < 30 * 60_000) return; // retry every 30 min inside the window
   db.setKv('memory_try_at', Date.now());
   try {
-    const r = await run();
+    const r = await run({ day });
     console.log(`[memory] ${describe(r)}`);
     // A failed history fetch (e.g. the personal session is down) or empty credit is retried until the window closes.
     if (!r.backfillError && !r.creditStop) db.setKv('last_memory_day', day);

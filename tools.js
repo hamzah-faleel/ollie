@@ -271,16 +271,18 @@ const handlers = {
   save_note: (a) => vault.saveNote(a),
   append_to_note: (a) => vault.appendToNote(a),
   add_to_daily_log: (a) => vault.addToDailyLog(a),
-  search_notes: (a) => vault.searchNotes(a),
-  read_note: (a) => vault.readNote(a),
+  // Text from notes, calendar events and contacts may have been written by someone else (pasted emails, invites, appended notes):
+  // reading it taints the turn and chat like email does, so mailout checks recipients and save_contact locks phone/email.
+  search_notes: (a, ctx) => (mailout.markRead(ctx), vault.searchNotes(a)),
+  read_note: (a, ctx) => (mailout.markRead(ctx), vault.readNote(a)),
   list_recent_notes: (a) => vault.listRecentNotes(a),
-  list_events: (a) => calendar.listEvents(a),
+  list_events: (a, ctx) => (mailout.markRead(ctx), calendar.listEvents(a)),
   create_event: (a) => calendar.createEvent(a),
   update_event: (a) => calendar.updateEvent(a),
   delete_event: (a) => calendar.deleteEvent(a),
   get_weather: (a) => weather.forecast(a),
-  save_contact: (a) => contacts.saveContact(a),
-  find_contact: (a) => contacts.findContact(a),
+  save_contact: (a, ctx) => contacts.saveContact(a, { lockIdentity: mailout.tainted(ctx) }), // no phone/email changes after untrusted text
+  find_contact: (a, ctx) => (mailout.markRead(ctx), contacts.findContact(a)),
   remember_fact: (a) => profile.rememberFact(a),
   forget_fact: (a) => profile.forgetFact(a),
   add_task: (a) => tasks.addTask(a),

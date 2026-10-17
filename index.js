@@ -3,6 +3,12 @@
 // Storage: SQLite (history, reminders) + Obsidian-style Markdown vault (notes).
 // Zero npm dependencies: Node 22 built-ins only.
 
+// Node 22 exits on an unhandled rejection. A stray one (a failed send inside a timer) must not take the bot down.
+// Only the error text and stack are logged, never message contents. A synchronous uncaught exception leaves the
+// process in an unknown state, so that one logs and exits (docker restarts it; sessions live in OpenWA).
+process.on('unhandledRejection', (e) => console.error('[fatal-ish] unhandled rejection:', e?.stack || e?.message || String(e)));
+process.on('uncaughtException', (e) => { console.error('[fatal] uncaught exception:', e?.stack || e?.message || String(e)); setTimeout(() => process.exit(1), 100); });
+
 const http = require('http');
 const outbox = require('./outbox');
 const mailout = require('./mailout');
@@ -153,6 +159,8 @@ async function transcribe({ buf, mimetype }) {
 }
 
 // ---------- message handling ----------
+// Phone numbers / chat ids in logs: last 3 digits only ("...567").
+const maskId = (v) => { const d = String(v ?? '').split('@')[0].replace(/\D/g, ''); return d ? `...${d.slice(-3)}` : 'n/a'; };
 function isOwner(msg) {
   const ids = [msg.from, msg.author, msg.senderPhone, msg.contact?.number]
     .filter(Boolean)
@@ -434,7 +442,9 @@ async function handle(event) {
       if (target) await sendText(target.sessionId, target.chatId, t);
     }, (t) => sendText(sessionId, msg.chatId, t)).catch((e) => { console.warn('[forward]', e.message); return false; });
     if (relayed) return;
-    console.log(`Ignored message from ${msg.from} (senderPhone=${msg.senderPhone ?? 'n/a'}). Add your number to OWNER_NUMBERS if this is you.`);
+    // Full ids only while OWNER_NUMBERS is empty (first setup: that is how the owner finds their own id); masked otherwise.
+    console.log(cfg.owners.length ? `Ignored message from ${maskId(msg.from)} (senderPhone=${maskId(msg.senderPhone)})`
+      : `Ignored message from ${msg.from} (senderPhone=${msg.senderPhone ?? 'n/a'}). Add your number to OWNER_NUMBERS if this is you.`);
     return;
   }
 
@@ -484,11 +494,11 @@ async function handle(event) {
   }
 
   // Confirming or cancelling a drafted message is handled here in code, never by the AI. Typed text only.
-  if (!viaVoice && !media && mailout.pending(msg.chatId)) { // same for a queued email (mailout.js checks the typed yes)
+  if (!viaVoice && !media && (mailout.pending(msg.chatId) || mailout.sending(msg.chatId))) { // same for a queued email (mailout.js checks the typed yes)
     const done = await mailout.handleReply(msg.chatId, text);
     if (done) return sendText(sessionId, msg.chatId, done);
   }
-  if (!viaVoice && !media && outbox.pendingDraft(msg.chatId)) {
+  if (!viaVoice && !media && (outbox.pendingDraft(msg.chatId) || outbox.sending(msg.chatId))) { // 'sending': a second yes while the first is in flight
     const t = text.toLowerCase().replace(/[.!\s]+$/g, '');
     const done = /^(yes|y|yep|send|send it|confirm|yes send|ok send|go ahead)$/.test(t) ? await outbox.confirm(msg.chatId, sendText)
       : /^(no|n|cancel|discard|don'?t send|stop)$/.test(t) ? outbox.cancel(msg.chatId) : null;
@@ -500,11 +510,15 @@ async function handle(event) {
 
   let answer;
   let ok = false;
+  const turnStart = Date.now();
+  // A draft or queued email from a turn whose answer never reached the owner must not wait for a yes: the owner never saw its text.
+  const dropUnseenDrafts = () => outbox.discardSince(msg.chatId, turnStart) + mailout.discardSince(msg.chatId, turnStart);
   try {
     const history = db.recentMessages(msg.chatId, cfg.historyLimit);
-    const turnStart = Date.now();
+    const ctx = { sessionId, chatId: msg.chatId };
+    await mailout.beginTurn(ctx, { media: Boolean(media) }); // trusted email addresses snapshot; media makes the turn untrusted
     let toolsUsed;
-    ({ text: answer, toolsUsed } = await ai.reply(await systemPrompt(), history, { sessionId, chatId: msg.chatId }, media));
+    ({ text: answer, toolsUsed } = await ai.reply(await systemPrompt(), history, ctx, media));
     const draft = toolsUsed.includes('send_whatsapp') && outbox.pendingDraft(msg.chatId);
     if (draft && draft.created_at >= turnStart) answer = outbox.draftPreview(draft); // show the exact text that would be sent, not the AI's paraphrase
     const mail = toolsUsed.includes('send_email') && mailout.pending(msg.chatId);
@@ -512,6 +526,8 @@ async function handle(event) {
     db.addMessage(msg.chatId, 'model', answer);
     ok = true;
   } catch (e) {
+    const dropped = dropUnseenDrafts();
+    if (dropped) console.warn(`[outbox] turn failed: cancelled ${dropped} unseen draft(s)`);
     if (e instanceof ai.QuotaError) answer = "I've hit my free AI limit for now. Try again in a minute (or tomorrow if it's the daily cap).";
     else if (e instanceof ai.CreditError) {
       answer = 'The AI is unavailable right now: its credit ran out.';
@@ -519,9 +535,15 @@ async function handle(event) {
     } else if (e instanceof ai.BusyError) answer = 'The AI is overloaded right now. Give it a minute and send that again.';
     else if (e instanceof ai.PrivacyError) answer = "I couldn't hide personal details safely, so I didn't send that to the AI. Try again, or /pseudo off if it keeps happening.";
     else throw e;
+    if (dropped) answer += '\n\nA message draft from this request was cancelled before you saw it. Nothing was sent; ask again when I\'m back.';
   }
   await setTyping(sessionId, msg.chatId, 'paused');
-  await sendText(sessionId, msg.chatId, viaVoice ? `🎙️ _"${text.length > 200 ? text.slice(0, 200) + '…' : text}"_\n\n${answer}` : answer);
+  try {
+    await sendText(sessionId, msg.chatId, viaVoice ? `🎙️ _"${text.length > 200 ? text.slice(0, 200) + '…' : text}"_\n\n${answer}` : answer);
+  } catch (e) {
+    dropUnseenDrafts(); // the preview never arrived
+    throw e;
+  }
 
   // Spoken copy of the answer, only when the owner spoke and has voice replies on. The text above is always sent first.
   if (viaVoice && voiceRepliesOn() && ok) {
@@ -548,7 +570,9 @@ async function tick() {
   if (ticking) return;
   ticking = true;
   try {
-    for (const r of db.dueReminders(Date.now())) {
+    let due = [];
+    try { due = db.dueReminders(Date.now()); } catch (e) { console.error('[reminder] could not read due reminders:', e.message); }
+    for (const r of due) {
       try {
         await sendText(r.session_id, r.chat_id, `⏰ *Reminder:* ${r.text}`);
         if (r.repeat === 'none') db.setReminderStatus(r.id, 'done');
@@ -642,8 +666,10 @@ const server = http.createServer((req, res) => {
 vault.init()
   .catch((e) => console.error('[vault] init failed (notes still work locally):', e.message))
   .finally(() => {
-    server.listen(cfg.port, () => console.log(`wa-bot listening on :${cfg.port} (owners: ${cfg.owners.join(', ') || 'none'})`));
-    setInterval(tick, 20_000);
+    server.listen(cfg.port, () => console.log(`wa-bot listening on :${cfg.port} (owners: ${cfg.owners.map(maskId).join(', ') || 'none'})`));
+    setInterval(() => tick().catch((e) => console.error('[reminder] tick failed:', e.message)), 20_000);
+    setInterval(() => { try { require('./retention').tick(); } catch (e) { console.error('[retention]', e.message); } }, 60 * 60_000); // daily purge, guarded by kv
+    setTimeout(() => { try { require('./retention').tick(); } catch (e) { console.error('[retention]', e.message); } }, 60_000);
     const reindex = () => vault.syncEmbeddings().catch((e) => console.warn('[embeddings]', e.message));
     setTimeout(reindex, 5_000);
     setInterval(reindex, 10 * 60_000); // also catches notes edited in Obsidian

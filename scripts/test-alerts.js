@@ -246,6 +246,58 @@ const hhmm = (d) => d.toLocaleTimeString('en-GB', { timeZone: 'Asia/Colombo', ho
   overLimit = false; alerts.triageCmd('off'); fresh(); modelCalls = []; row('94766660002', 'Test Off', 'urgent hi', 5); await scan();
   check('/triage off stops model calls', modelCalls.length === 0 && texts.length === 1);
 
+  // --- fix 1: ack only touches alerts that were actually texted
+  fresh(); process.env.ALERT_QUIET = `${hhmm(new Date(Date.now() - 3_600_000))}-${hhmm(new Date(Date.now() + 3_600_000))}`;
+  alerts.raise({ key: 'held1', kind: 'pending', text: 'Held normal alert' });
+  alerts.raise({ key: 'sent1', kind: 'message', urgent: true, text: 'Sent urgent alert' });
+  await alerts.deliver();
+  check('ack() only acknowledges delivered alerts', alerts.ack() === 1 && open() === 1, String(open()));
+  check('/alerts still shows the undelivered one as waiting to send', /Held normal alert[^\n]*waiting to send/.test(alerts.list()));
+  process.env.ALERT_QUIET = ''; reset(); await alerts.deliver();
+  check('the held alert is delivered after the ack', texts.length === 1 && /Held normal alert/.test(texts[0]), texts.join('|'));
+  alerts.ack();
+
+  // --- fix 4: @lid chat answered through the bot (stored as <phone>@c.us)
+  fresh();
+  inbox.insertRaw({ msg_id: 'lid-in', chat_id: '900000000321@lid', chat_name: 'Test Lid', sender: 'Test Lid', is_group: 0, ts: Date.now() - 10 * 60_000, type: 'chat', text: 'urgent call me', seen: 1, from_me: 0, phone: '94733330321', source: 'personal' });
+  check('an @lid chat is unanswered before the reply', alerts.unanswered().length === 1);
+  inbox.insertRaw({ msg_id: 'lid-out', chat_id: '94733330321@c.us', chat_name: 'Test Lid', sender: 'Me', is_group: 0, ts: Date.now() - 5 * 60_000, type: 'chat', text: 'on it', seen: 1, from_me: 1, phone: '', source: 'bot-owner' });
+  check('a bot-owner reply on <phone>@c.us answers the @lid chat', alerts.unanswered().length === 0);
+
+  // --- fix 5: /vip remove
+  fresh();
+  alerts.vip('add Alex'); alerts.vip('add Max'); alerts.vip('add Bob'); alerts.vip('add 0771234567');
+  const names = () => db.prepare('SELECT phone, name FROM vips').all();
+  check('/vip remove by name removes only that name', /Removed 1/.test(alerts.vip('remove bob')) && names().length === 3 && !names().some((v) => /bob/i.test(v.name)), JSON.stringify(names()));
+  check('a name never matches phone numbers', /No VIP matches/.test(alerts.vip('remove xyz')) && names().length === 3);
+  check('/vip remove by number matches a VIP added in another format', /Removed 1/.test(alerts.vip('remove +94771234567')) && names().length === 2, JSON.stringify(names()));
+  check('a short digit string does not mass-delete', /No VIP matches/.test(alerts.vip('remove 7')) && names().length === 2);
+
+  // --- fix 6: missed-call dedupe by callId alone
+  fresh();
+  const callEv = { event: 'call.missed', data: { callId: 'CALL-1', senderPhone: '94733330777' } };
+  const first = alerts.recordCall(callEv);
+  await sleep(5);
+  const again = alerts.recordCall(callEv);
+  check('the same callId is one alert even across minutes (key has no time bucket)', first === true && again === false && db.prepare("SELECT akey FROM alerts").get().akey === 'call:CALL-1');
+  check('a different callId raises a new alert', alerts.recordCall({ event: 'call.missed', data: { callId: 'CALL-2', senderPhone: '94733330777' } }) === true);
+
+  // --- fix 8: tasks.js with CRLF and [X]
+  {
+    const tasks = require('../tasks'), tf = path.join(tmp, 'vault', 'Tasks.md');
+    fs.mkdirSync(path.dirname(tf), { recursive: true });
+    fs.writeFileSync(tf, '# Tasks\r\n\r\n- [X] Test capital done \u2705 2020-01-01\r\n- [ ] Test first open\r\n- [ ] Test second open\r\n');
+    const open1 = (await tasks.openTasks()).map((t) => t.text);
+    check('CRLF file: open tasks parsed, capital [X] is done', open1.length === 2 && open1[0] === 'Test first open' && open1[1] === 'Test second open', JSON.stringify(open1));
+    await tasks.addTask({ text: 'Test added' });
+    await tasks.completeTask({ match: 'first' });
+    const out = fs.readFileSync(tf, 'utf8');
+    check('line endings stay CRLF after add and complete', !/[^\r]\n/.test(out) && /- \[x\] Test first open/.test(out) && /- \[ \] Test added\r\n$/.test(out), JSON.stringify(out));
+    fs.writeFileSync(tf, '# Tasks\n\n- [ ] Test lf task\n');
+    await tasks.addTask({ text: 'Test lf two' });
+    check('LF files stay LF', !/\r/.test(fs.readFileSync(tf, 'utf8')));
+  }
+
   tw.close(); fs.rmSync(tmp, { recursive: true, force: true });
   console.log(failures ? `\n${failures} FAILED` : '\nAll alert tests passed');
   process.exit(failures ? 1 : 0);

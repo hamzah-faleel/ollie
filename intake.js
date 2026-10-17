@@ -122,6 +122,7 @@ async function writeProfile(p) {
   fm = memory.setFm(fm || 'private: true', {
     private: 'true', phone: `+${p.phone}`, ...(/^relationship:/m.test(fm) ? {} : { relationship: rel }),
     ...(a.org ? { org: clean(a.org, 60).replace(/:/g, ' -') } : {}), last_contact: today(), source: `form ${today()}`,
+    ...(note ? {} : { origin: 'bot' }), // self-reported name: outbox.js never resolves "message <name>" from a note this form created
   });
   await fs.mkdir(path.dirname(file), { recursive: true });
   await fs.writeFile(file, `---\n${fm}\n---\n${body.trim()}\n`);

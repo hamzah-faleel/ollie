@@ -83,7 +83,8 @@ function raise({ key, kind, text, urgent = false, spoken = 'You have an urgent a
   return r.changes > 0;
 }
 
-const ack = () => db.prepare('UPDATE alerts SET acked_at = ? WHERE acked_at IS NULL AND resolved_at IS NULL').run(Date.now()).changes;
+// Only alerts that were actually texted are acknowledged; ones still waiting (quiet hours, hourly cap) stay open and get delivered later.
+const ack = () => db.prepare('UPDATE alerts SET acked_at = ? WHERE acked_at IS NULL AND resolved_at IS NULL AND texted_at IS NOT NULL').run(Date.now()).changes;
 
 async function deliver() {
   const now = Date.now();
@@ -163,6 +164,8 @@ function unanswered(now = Date.now(), windowMs = 6 * 3_600_000) {
     const last = incoming[incoming.length - 1];
     if (!last) continue;
     if (list.some((r) => r.from_me && (r.source === 'personal' || r.source === 'bot-owner') && r.ts > last.ts)) continue;   // you answered (phone, or via the bot)
+    const ph = digits(last.phone).slice(-9);                                      // an answer sent through the bot is filed under <phone>@c.us, not the @lid chat id
+    if (ph.length >= 7 && rows.some((r) => r.from_me && r.chat_id !== last.chat_id && r.ts > last.ts && (r.source === 'personal' || r.source === 'bot-owner') && digits(String(r.chat_id).split('@')[0]).slice(-9) === ph)) continue;
     out.push({ last, incoming, waited: now - last.ts });
   }
   return out;
@@ -236,7 +239,7 @@ function recordCall(event) {
   const name = db.prepare('SELECT chat_name FROM inbox_messages WHERE (phone = ? AND ? != \'\') OR chat_id = ? LIMIT 1').get(phone, phone, String(d.chatId || d.from || ''))?.chat_name
     || d.contact?.name || d.contact?.pushName || (phone ? `+${phone}` : 'someone');
   return raise({
-    key: `call:${d.callId || d.id || phone}:${Math.floor(Date.now() / 60_000)}`, kind: 'call', urgent: true,
+    key: (d.callId || d.id) ? `call:${d.callId || d.id}` : `call:${phone}:${Math.floor(Date.now() / 60_000)}`, kind: 'call', urgent: true,
     text: `Missed ${d.isVideo || d.video ? 'video ' : ''}call from *${name}*`, spoken: 'You missed a call on WhatsApp.', detail: `It was from ${name}.`,
   });
 }
@@ -275,7 +278,7 @@ async function scanUnreadVips() {
   if (!hours || isQuiet() || !inRange(process.env.ALERT_NUDGE_WINDOW ?? '08:00-21:00')) return;
   const items = (await require('./unread').list({ isVip })).filter((u) => u.vip && Date.now() - u.since >= hours * 3_600_000);
   for (const u of items.slice(0, 3)) {
-    raise({ key: `unread:${u.id}:${u.last}`, kind: 'unread', text: `*${u.name}* (VIP) has ${u.count} unread message${u.count === 1 ? '' : 's'} from ${require('./unread').age(u.since)} ago${u.preview ? `: "${short(u.preview)}"` : ''}. /unread`, footer: false });
+    raise({ key: `unread:${u.id}:${u.lastKey}`, kind: 'unread', text: `*${u.name}* (VIP) has ${u.count} unread message${u.count === 1 ? '' : 's'} from ${require('./unread').age(u.since)} ago${u.preview ? `: "${short(u.preview)}"` : ''}. /unread`, footer: false });
   }
 }
 
@@ -345,7 +348,10 @@ function vip(arg) {
   }
   if (!['add', 'remove'].includes(cmd) || !q) return 'Use /vip add <name or number>, /vip remove <name or number> or /vip list.';
   if (cmd === 'remove') {
-    const r = db.prepare('DELETE FROM vips WHERE lower(name) LIKE ? OR phone LIKE ?').run(`%${q.toLowerCase()}%`, `%${digits(q) || 'x'}`);
+    const qd = digits(q);
+    const r = qd.length >= 7
+      ? db.prepare('DELETE FROM vips WHERE substr(phone, -9) = substr(?, -9)').run(qd)
+      : db.prepare('DELETE FROM vips WHERE lower(name) LIKE ?').run(`%${q.toLowerCase()}%`);
     return r.changes ? `Removed ${r.changes}.` : `No VIP matches "${q}".`;
   }
   let phone = digits(q).length >= 7 ? digits(q) : '';

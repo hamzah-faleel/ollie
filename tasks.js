@@ -7,11 +7,11 @@ const DUE = /\s*📅\s*(\d{4}-\d{2}-\d{2})/;
 const read = () => fs.readFile(files.safePath(FILE), 'utf8').catch(() => '# Tasks\n\n');
 
 function parse(text) {
-  return text.split('\n').map((line, idx) => {
-    const m = /^- \[( |x)\] (.*)$/.exec(line);
+  return text.split(/\r?\n/).map((line, idx) => {
+    const m = /^- \[( |x|X)\] (.*)$/.exec(line);
     if (!m) return null;
     const due = DUE.exec(m[2])?.[1] || null;
-    return { idx, done: m[1] === 'x', text: m[2].replace(DUE, '').trim(), due };
+    return { idx, done: m[1] !== ' ', text: m[2].replace(DUE, '').trim(), due };
   }).filter(Boolean);
 }
 const byDue = (a, b) => (a.due || '9999').localeCompare(b.due || '9999') || a.idx - b.idx;
@@ -31,8 +31,9 @@ async function addTask({ text, due }) {
   if (!text || !String(text).trim()) return { error: 'Need the task text.' };
   if (due && !/^\d{4}-\d{2}-\d{2}$/.test(due)) return { error: 'due must be YYYY-MM-DD.' };
   await files.pull();
-  const body = (await read()).replace(/\n*$/, '\n');
-  await fs.writeFile(files.safePath(FILE), `${body}- [ ] ${String(text).replace(/\s+/g, ' ').trim()}${due ? ` 📅 ${due}` : ''}\n`);
+  const raw = await read(), nl = raw.includes('\r\n') ? '\r\n' : '\n';
+  const body = raw.replace(/(\r?\n)*$/, nl);
+  await fs.writeFile(files.safePath(FILE), `${body}- [ ] ${String(text).replace(/\s+/g, ' ').trim()}${due ? ` 📅 ${due}` : ''}${nl}`);
   files.schedulePush('Add task');
   return { status: 'added', text, due: due || null };
 }
@@ -49,9 +50,10 @@ async function completeTask({ match }) {
   const hits = /^\d+$/.test(want) ? [open[Number(want) - 1]].filter(Boolean) : open.filter((t) => t.text.toLowerCase().includes(want));
   if (hits.length === 0) return { error: `No open task matches "${match}".` };
   if (hits.length > 1) return { error: 'More than one task matches; be more specific.', matches: hits.map((t) => t.text) };
-  const lines = (await read()).split('\n');
+  const raw = await read(), nl = raw.includes('\r\n') ? '\r\n' : '\n';
+  const lines = raw.split(/\r?\n/);
   lines[hits[0].idx] = lines[hits[0].idx].replace('- [ ]', '- [x]') + ` ✅ ${files.today()}`;
-  await fs.writeFile(files.safePath(FILE), lines.join('\n'));
+  await fs.writeFile(files.safePath(FILE), lines.join(nl));
   files.schedulePush('Complete task');
   return { status: 'completed', text: hits[0].text };
 }

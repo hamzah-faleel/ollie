@@ -32,12 +32,14 @@ db.exec(`
     refs TEXT,
     reply_subject TEXT,             -- subject of the email being answered, for the preview
     unverified TEXT,                -- addresses the owner must type back, comma-separated ('' = none)
-    status TEXT NOT NULL DEFAULT 'draft',  -- draft | sent | cancelled | expired | failed
+    status TEXT NOT NULL DEFAULT 'draft',  -- draft | sending | sent | cancelled | expired | failed
     created_at INTEGER NOT NULL,
     sent_at INTEGER,
     gmail_id TEXT
   );
 `);
+// Nothing is in flight at startup: a row left 'sending' by a crash mid-send is marked failed (never resent, since Gmail may have it).
+db.prepare("UPDATE email_outbox SET status = 'failed' WHERE status = 'sending'").run();
 
 const ADDR = /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+$/;
 // "Name <a@b.c>" or "a@b.c" -> "a@b.c" (lowercased), else null
@@ -48,7 +50,8 @@ function bareAddress(s) {
   return ADDR.test(a) && a.length <= 254 ? a : null;
 }
 
-// Called by the search_emails / read_email tools: this turn (ctx) and this chat now carry untrusted email text.
+// Called by every tool that returns text someone else could have written (emails, notes, calendar events, contacts) and for turns with
+// media: this turn (ctx) and this chat now carry untrusted text. (The kv key keeps its old name so existing state carries over.)
 function markRead(ctx) {
   if (!ctx) return;
   ctx.emailRead = true;
@@ -60,6 +63,13 @@ async function contactEmails() {
   const set = new Set();
   for (const c of await contacts.allContacts()) for (const e of String(c.email || '').split(/[,;\s]+/)) { const a = bareAddress(e); if (a) set.add(a); }
   return set;
+}
+
+// Called by index.js before the AI turn: the trusted-address list is taken ONCE here, so a contact saved during the turn (possibly
+// prompted by injected text) is not trusted for sending in that same turn. A turn with an image/PDF/file is untrusted from the start.
+async function beginTurn(ctx, { media = false } = {}) {
+  if (media) markRead(ctx);
+  if (enabled()) ctx.trustedEmails = await contactEmails().catch(() => new Set());
 }
 
 // RFC 2047 encoded-words for non-ASCII header text; each word <= 75 chars, folded onto continuation lines.
@@ -85,7 +95,8 @@ function buildRaw(e) {
   return Buffer.from(lines.join('\r\n'), 'utf8').toString('base64url');
 }
 
-const sentToday = () => db.prepare("SELECT COUNT(*) n FROM email_outbox WHERE status = 'sent' AND sent_at > ?").get(Date.now() - 86_400_000).n;
+// Counts emails being sent right now too, so two quick yeses can't both pass the limit.
+const sentToday = () => db.prepare("SELECT COUNT(*) n FROM email_outbox WHERE (status = 'sent' AND sent_at > ?) OR (status = 'sending' AND created_at > ?)").get(Date.now() - 86_400_000, Date.now() - 86_400_000).n;
 
 // Tool handler. Validates everything in code; the AI's text is never trusted for headers.
 async function queue({ to, subject, body, reply_to_id } = {}, ctx) {
@@ -125,7 +136,7 @@ async function queue({ to, subject, body, reply_to_id } = {}, ctx) {
   // Injection defence: after reading email, only the replied-to sender or a saved contact is trusted.
   let unverified = [];
   if (tainted(ctx)) {
-    const known = await contactEmails();
+    const known = new Set(ctx.trustedEmails || await contactEmails()); // snapshot from the start of the turn
     if (thread?.from) known.add(thread.from);
     unverified = addrs.filter((a) => !known.has(a));
   }
@@ -155,7 +166,9 @@ function preview(e) {
 }
 
 async function send(e) {
-  if (sentToday() >= DAILY_LIMIT) {
+  // Claim the draft before any network call: a second "yes" arriving while Gmail is still answering finds nothing to send.
+  if (db.prepare("UPDATE email_outbox SET status = 'sending' WHERE id = ? AND status = 'draft'").run(e.id).changes !== 1) return 'That email is already being sent (or was cancelled).';
+  if (sentToday() - 1 >= DAILY_LIMIT) { // minus this one, which is now 'sending'
     db.prepare("UPDATE email_outbox SET status = 'cancelled' WHERE id = ?").run(e.id);
     return `Daily email limit reached (${DAILY_LIMIT} per 24h). Draft discarded.`;
   }
@@ -174,8 +187,8 @@ async function send(e) {
 // The owner's typed reply while an email is pending. Returns the answer for the owner, or null (not a yes/no).
 async function handleReply(ownerChat, text) {
   const e = pending(ownerChat);
-  if (!e) return null;
   const t = String(text || '').trim().toLowerCase().replace(/[.!\s]+$/g, '');
+  if (!e) return sending(ownerChat) && /^(?:yes|y|yep|send|send it|confirm|yes send|ok send|go ahead)\b/.test(t) ? 'That email is already being sent.' : null;
   if (/^(no|n|cancel|discard|don'?t send|stop)$/.test(t)) {
     db.prepare("UPDATE email_outbox SET status = 'cancelled' WHERE id = ?").run(e.id);
     return 'Cancelled. The email was not sent.';
@@ -208,5 +221,9 @@ function command(args, ownerChat) {
 
 // Used by outbox.js so a new WhatsApp draft replaces a waiting email (only one "yes" can be pending).
 const discard = (ownerChat) => db.prepare("UPDATE email_outbox SET status = 'cancelled' WHERE owner_chat = ? AND status = 'draft'").run(ownerChat);
+// The AI turn failed after queueing: the owner never saw the preview, so the email must not stay waiting for a yes. Returns how many.
+const discardSince = (ownerChat, since) => Number(db.prepare("UPDATE email_outbox SET status = 'cancelled' WHERE owner_chat = ? AND status = 'draft' AND created_at >= ?").run(ownerChat, since).changes);
+// An email of this chat is being handed to Gmail right now (claimed by a yes).
+const sending = (ownerChat) => Boolean(db.prepare("SELECT 1 FROM email_outbox WHERE owner_chat = ? AND status = 'sending' LIMIT 1").get(ownerChat));
 
-module.exports = { enabled, markRead, queue, pending, preview, handleReply, cancel, command, discard, encodeHeader, buildRaw, bareAddress };
+module.exports = { enabled, markRead, tainted, beginTurn, contactEmails, queue, pending, sending, preview, handleReply, cancel, command, discard, discardSince, encodeHeader, buildRaw, bareAddress };

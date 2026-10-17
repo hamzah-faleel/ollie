@@ -43,7 +43,7 @@ async function run(systemPrompt, history, ctx, media) {
   const p = await pseudoSession();
   if (p) {
     ({ systemPrompt, history, media } = guard(() => ({
-      systemPrompt: p.hide(`${systemPrompt}\n\n${pseudonym.HINT}`),
+      systemPrompt: `${p.hide(systemPrompt)}\n\n${pseudonym.HINT}`, // the hint is ours: added after hiding so its sample tokens stay intact
       history: history.map((m) => ({ ...m, text: p.hide(m.text) })),
       media: hideMedia(p, media),
     })));
@@ -57,7 +57,7 @@ async function run(systemPrompt, history, ctx, media) {
 
     const results = [];
     for (const call of turn.calls) {
-      console.log(`[tool] ${call.name} ${JSON.stringify(call.args)}`); // as the model sent them (placeholders), never the mapping
+      console.log(`[tool] ${call.name} ${Object.keys(call.args || {}).join(',')}`); // argument names only: values hold message text and note contents
       toolsUsed.push(call.name);
       const result = await tools.run(call.name, p ? guard(() => p.showDeep(call.args)) : call.args, ctx);
       results.push(p ? guard(() => p.hideDeep(result)) : result);
@@ -80,7 +80,7 @@ async function untrusted(system, user, maxTokens, opts = {}) {
   if (!viaClaude && typeof provider.plain !== 'function') throw new Error('Inbox processing needs AI_PROVIDER=openrouter (zero-data-retention routing).');
   const p = await pseudoSession();
   if (!p) return run(system, user);
-  const [sys, msg] = guard(() => [p.hide(`${system}\n${pseudonym.HINT}`), p.hide(user)]);
+  const [sys, msg] = guard(() => [`${p.hide(system)}\n${pseudonym.HINT}`, p.hide(user)]);
   const out = await run(sys, msg);
   return guard(() => p.show(out));
 }
@@ -89,7 +89,7 @@ async function converse(system, messages, maxTokens) {
   if (typeof provider.converse !== 'function') throw new Error('Chatting with outside people needs AI_PROVIDER=openrouter (zero-data-retention routing).');
   const p = await pseudoSession();
   if (!p) return turnStore.run(crypto.randomUUID(), () => provider.converse(system, messages, maxTokens));
-  const [sys, msgs] = guard(() => [p.hide(`${system}\n${pseudonym.HINT}`), messages.map((m) => ({ ...m, content: p.hide(m.content) }))]);
+  const [sys, msgs] = guard(() => [`${p.hide(system)}\n${pseudonym.HINT}`, messages.map((m) => ({ ...m, content: p.hide(m.content) }))]);
   const out = await turnStore.run(crypto.randomUUID(), () => provider.converse(sys, msgs, maxTokens));
   return guard(() => p.show(out));
 }

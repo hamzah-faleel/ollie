@@ -93,12 +93,12 @@ const markBirthdays = (list) => { for (const b of list) db.setKv(bdayKey(b), loc
 
 // Called every minute. send(text, chatId) throws on failure so the job is retried on the next tick.
 async function tick(send, { target } = {}) {
+  try {
   const tg = target || JSON.parse(db.getKv('owner_target') || 'null');
   if (!tg) return;
   const now = new Date(), today = localDay(now), nowMin = minutesNow(now);
   if (alerts.isQuiet(now)) return;
   const wrapOn = parseHM(wrapTime()) !== null;
-  try {
     if (wrapOn) {
       if (!isDue(nowMin, parseHM(wrapTime()), db.getKv('last_wrap'), today)) return;
       const { text, bdays } = await build(tg.chatId, { scheduled: true });

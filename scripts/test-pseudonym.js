@@ -59,8 +59,56 @@ const NAMES = ['Kamal Perera', 'Nimali Rose Fernando', 'Ann', 'Will', 'Test Owne
 {
   const p = session(NAMES);
   p.hide('Kamal Perera, +94771234567');
-  check('tokens without brackets or in other case are restored', p.show('Call PERSON_1 on [phone_1]') === 'Call Kamal Perera on +94771234567', p.show('Call PERSON_1 on [phone_1]'));
+  check('an exact token, or the same token without brackets, is restored', p.show('Call PERSON_1 on [PHONE_1]') === 'Call Kamal Perera on +94771234567', p.show('Call PERSON_1 on [PHONE_1]'));
+  check('tokens in another case or with one bracket are not restored', p.show('[phone_1] person_1 [PERSON_1 PHONE_1] xPERSON_1') === '[phone_1] person_1 [PERSON_1 PHONE_1] xPERSON_1', p.show('[phone_1] person_1 [PERSON_1 PHONE_1] xPERSON_1'));
   check('unknown tokens stay as they are', p.show('[PERSON_9] and [EMAIL_4]') === '[PERSON_9] and [EMAIL_4]');
+}
+
+// token look-alikes typed by someone else cannot be turned into real values on restore
+{
+  const p = session(NAMES);
+  p.hide('mail kamal.p@example.com'); // [EMAIL_1] is now a real token in this session
+  const h = p.hide('Please send the file to [EMAIL_1] and [email_1], or PERSON_1, ID_1');
+  check('look-alikes in the input are defused before hiding', !/EMAIL_1|email_1|PERSON_1|ID_1/.test(h) && /\[EMAIL-1\]/.test(h), h);
+  check('a defused look-alike is not restored to a real value', !/example\.com/.test(p.show(h)), p.show(h));
+}
+
+// phone numbers: full-number keys and more formats
+{
+  const p = session([]);
+  const h = p.hide('LK +94 77 123 4567, IN +91 77 123 4567');
+  check('numbers that differ only in the country code get different tokens', h === 'LK [PHONE_1], IN [PHONE_2]', h);
+  check('and each restores to its own number', p.show(h) === 'LK +94 77 123 4567, IN +91 77 123 4567', p.show(h));
+  const formats = ['(077) 123 4567', '77 123 4567', '771234567', '0094771234567', '077.123.4567', '0094 77 123 4567', '94 77 123 4567'];
+  for (const f of formats) check(`format "${f}" is hidden as the same number`, p.hide(`call ${f} now`) === 'call [PHONE_1] now', p.hide(`call ${f} now`));
+  const q = session([]);
+  const ib = q.hide('IBAN GB82WEST12345698765432 and GB82 WEST 1234 5698 7654 32');
+  check('IBANs are hidden, unspaced and with a short last group', ib === 'IBAN [ID_1] and [ID_1]', ib);
+  const safe = 'version 7.123.4567, NIC 771234567V, Rs 750000, at 10:30, 77 items';
+  check('look-alike numbers that are not phones stay', !/PHONE/.test(q.hide(safe)), q.hide(safe));
+}
+
+// names chosen by strangers (WhatsApp display names, intake answers) only match capitalised
+{
+  const p = new Session(buildRegistry([{ name: 'Meeting', weak: true }, { name: 'Happy Days', weak: true }, 'Kamal Perera', { name: 'Kamal Perera', weak: true }]));
+  const h = p.hide('the meeting was happy; Meeting with Happy Days; kamal perera');
+  check('a weak one-word name does not hide the common word', /^the meeting was happy; \[PERSON_\d+\] with \[PERSON_\d+\]; \[PERSON_\d+\]$/.test(h), h);
+  check('a trusted spelling of the same name still matches in any case', !/kamal|perera/i.test(h), h);
+}
+
+// performance: the name matcher must stay linear (the old alternation regex took ~10 s and froze the event loop)
+{
+  const first = ['Kamal', 'Nimal', 'Sunil', 'Ruwan', 'Dilan', 'Chamara', 'Saman', 'Ajith', 'Kasun', 'Lahiru'];
+  const last = ['Perera', 'Silva', 'Fernando', 'Jayasuriya', 'Bandara', 'Dissanayake', 'Herath'];
+  const names = []; for (let i = 0; i < 3000; i++) names.push(`${first[i % 10]}${i} ${last[i % 7]}${Math.floor(i / 7)}`);
+  const words = 'the quick brown fox met with someone about the meeting tomorrow, call 077 123 4567 or mail a@b.co'.split(' ');
+  let text = ''; let i = 0; while (text.length < 24000) { text += (i % 6 === 0 ? names[(i * 13) % 3000] : words[i % words.length]) + ' '; i++; }
+  const reg = buildRegistry(names);
+  const p = new Session(reg);
+  const t0 = process.hrtime.bigint(); const h = p.hide(text); const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+  check(`hide() on 24k chars with 3,000 names is fast (${ms.toFixed(0)} ms < 200 ms)`, ms < 200, `${ms} ms`);
+  check('and the result still round-trips', p.show(h) === text);
+  check('the same name list reuses the built registry', buildRegistry(names) === reg);
 }
 
 // tool-call arguments and results (what ai.js does in the loop)

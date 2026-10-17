@@ -29,17 +29,46 @@ const render = (name, fields, body) => {
   return `---\ntype: contact\n${keys.filter((k) => fields[k]).map((k) => `${k}: ${fields[k]}`).join('\n')}\n---\n${body.replace(/^\n+/, '')}`.replace(/\n*$/, '\n');
 };
 
-async function saveContact({ name, phone, email, relationship, company, birthday, notes }, { pull = true } = {}) {
-  if (!name || !String(name).trim()) return { error: 'Need a name.' };
-  if (birthday && !normBirthday(birthday)) return { error: 'birthday must be YYYY-MM-DD, or --MM-DD when the year is unknown.' };
+// One line, no control characters: a value with a line break could otherwise add its own frontmatter line (e.g. a second "phone:").
+const oneLine = (v) => String(v ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, ' ').replace(/\s+/g, ' ').trim();
+// Same phone / same email, ignoring formatting.
+const sameValue = (k, a, b) => (k === 'phone' ? digits(a) === digits(b) : String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase());
+
+// When a contact's phone or email last changed (ms), kept in SQLite kv so the WhatsApp/email previews can warn about a fresh change.
+const changeKey = (name) => `contact_changed:${files.slug(name).toLowerCase()}`;
+function recentChange(name, days = 7) {
+  let rec = {};
+  try { rec = JSON.parse(require('./db').getKv(changeKey(name)) || '{}'); } catch { return {}; }
+  const since = Date.now() - days * 86_400_000;
+  return Object.fromEntries(Object.entries(rec).filter(([, ms]) => Number(ms) > since));
+}
+
+// lockIdentity: the turn has read untrusted text (email, notes, calendar, media), so an existing contact's phone/email may not change
+// (that is how injected text would redirect a later message). New contacts are still allowed.
+async function saveContact({ name, phone, email, relationship, company, birthday, notes }, { pull = true, lockIdentity = false } = {}) {
+  if (!name || !oneLine(name)) return { error: 'Need a name.' };
+  if (birthday && !normBirthday(oneLine(birthday))) return { error: 'birthday must be YYYY-MM-DD, or --MM-DD when the year is unknown.' };
   if (pull) await files.pull();
-  const clean = files.slug(name);
+  const clean = files.slug(oneLine(name));
   const file = files.safePath(path.join(DIR, `${clean}.md`));
   await fs.mkdir(path.dirname(file), { recursive: true });
   const existing = await fs.readFile(file, 'utf8').catch(() => null);
   const { fields, body } = existing ? parseNote(existing) : { fields: {}, body: `# ${clean}\n` };
-  const incoming = { phone, email, relationship, company, birthday: birthday && normBirthday(birthday) };
-  for (const k of FIELDS) if (incoming[k]) fields[k] = String(incoming[k]).trim();
+  const incoming = { phone, email, relationship, company, birthday: birthday && normBirthday(oneLine(birthday)) };
+  for (const k of FIELDS) incoming[k] = incoming[k] ? oneLine(incoming[k]) : '';
+  const changed = existing ? ['phone', 'email'].filter((k) => incoming[k] && !sameValue(k, incoming[k], fields[k])) : [];
+  if (changed.length && lockIdentity) {
+    return { error: `Refused: ${clean}'s ${changed.join(' and ')} was not changed. After reading emails, notes, calendar events or a file in this chat, saved contact details can't be changed (text in them could be trying to redirect messages). Tell the owner: they can share the contact card, edit People/${clean}.md, or ask again in about 2 hours.` };
+  }
+  for (const k of FIELDS) if (incoming[k]) fields[k] = incoming[k];
+  if (changed.length) {
+    try {
+      const db = require('./db');
+      const rec = JSON.parse(db.getKv(changeKey(clean)) || '{}');
+      for (const k of changed) rec[k] = Date.now();
+      db.setKv(changeKey(clean), JSON.stringify(rec));
+    } catch (e) { console.warn('[contacts] change time not recorded:', e.message); }
+  }
   const extra = notes ? `\n- ${files.today()}: ${String(notes).replace(/\s+/g, ' ').trim()}\n` : '';
   await fs.writeFile(file, render(clean, fields, body.replace(/\n*$/, '\n') + extra));
   files.schedulePush(`Contact: ${clean}`);
@@ -150,4 +179,4 @@ async function birthdaysTomorrow() {
   return birthdaysOn(await allContacts(), ymdUtc(Date.UTC(y, m - 1, d + 1)));
 }
 
-module.exports = { saveContact, findContact, allContacts, importVcards, upcomingBirthdays, birthdaysOn, birthdaysTomorrow };
+module.exports = { saveContact, findContact, allContacts, importVcards, upcomingBirthdays, birthdaysOn, birthdaysTomorrow, recentChange };

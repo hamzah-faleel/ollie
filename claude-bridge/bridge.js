@@ -22,17 +22,35 @@ const strip = (s) => s.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07|\x1
 const same = (a, b) => { const x = Buffer.from(a), y = Buffer.from(b); return x.length === y.length && crypto.timingSafeEqual(x, y); };
 
 // ---- /ask: one request at a time, no tools ----
+// `--tools ""` only removes the built-in tools: verified with the real CLI (2.1.302) that the account's claude.ai connectors
+// (mcp__claude_ai_* : Gmail, Drive, Calendar, ...) stay callable with it alone. So /ask also:
+//   --strict-mcp-config --mcp-config '{"mcpServers":{}}'  no MCP servers at all (connectors, ~/.claude.json, .mcp.json)
+//   --disallowedTools mcp__*                               and deny any MCP tool that still shows up
+//   --setting-sources ""                                   ignore user/project/local settings (hooks, plugins, permissions,
+//                                                          CLAUDE.md) that a tool-enabled /code session could have written
+//   --safe-mode                                            all customizations off (CLAUDE.md, skills, plugins, hooks, MCP)
+// With these the CLI reports no tools at all and ignores a planted CLAUDE.md (checked live). A separate HOME for /ask was
+// considered and not used: /code runs as the same user and could write there too, and a copied OAuth login would diverge
+// from the main one when the refresh token rotates. The flags, not the directory, are what keep /ask tool-less.
+const ASK_FLAGS = ['-p', '--tools', '', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--disallowedTools', 'mcp__*',
+  '--setting-sources', '', '--safe-mode', '--no-session-persistence'];
 let queue = Promise.resolve();
-function ask({ system, user }) {
+// signal: aborted when the HTTP client went away; a queued job is dropped and a running claude child is killed.
+function ask({ system, user }, signal) {
   const run = () => new Promise((resolve, reject) => {
-    const args = ['-p', '--tools', '', '--no-session-persistence', '--system-prompt', String(system || 'You are a helpful assistant.'), ...(MODEL ? ['--model', MODEL] : [])];
+    if (signal?.aborted) return reject(new Error('client disconnected'));
+    const args = [...ASK_FLAGS, '--system-prompt', String(system || 'You are a helpful assistant.'), ...(MODEL ? ['--model', MODEL] : [])];
     const p = spawn('claude', args, { cwd: ASK_DIR, env: childEnv(), stdio: ['pipe', 'pipe', 'pipe'] });
     let out = '', err = '';
     const timer = setTimeout(() => { p.kill('SIGKILL'); reject(new Error('timed out')); }, ASK_TIMEOUT_MS);
+    const onAbort = () => { clearTimeout(timer); p.kill('SIGKILL'); console.log('[ask] client disconnected, claude stopped'); reject(new Error('client disconnected')); };
+    signal?.addEventListener('abort', onAbort, { once: true });
+    p.on('close', () => signal?.removeEventListener('abort', onAbort));
+    p.stdin.on('error', () => {}); // the child may die before reading stdin
     p.stdout.on('data', (d) => { out += d; });
     p.stderr.on('data', (d) => { err += d; });
     p.on('error', (e) => { clearTimeout(timer); reject(e); });
-    p.on('close', (code) => { clearTimeout(timer); code === 0 && out.trim() ? resolve(out.trim()) : reject(new Error(strip(err || out).trim().slice(0, 300) || `claude exited with ${code}`)); });
+    p.on('close', (code) => { clearTimeout(timer); code === 0 && out.trim() ? resolve(out.trim()) : reject(new Error(strip(err || out).trim().slice(0, 300) || (code === 0 ? 'empty answer from claude' : `claude exited with ${code}`))); });
     p.stdin.end(String(user || ''));
   });
   const next = queue.then(run, run);
@@ -78,14 +96,16 @@ function readJson(req) {
 }
 
 http.createServer(async (req, res) => {
-  const send = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj)); };
+  const send = (code, obj) => { if (res.destroyed || res.headersSent) return; res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj)); };
   try {
     if (req.url === '/health') return send(200, { ok: true });
     if (!same(String(req.headers['x-bridge-token'] || ''), TOKEN)) return send(401, { error: 'unauthorized' });
     if (req.method === 'POST' && req.url === '/ask') {
       const b = await readJson(req);
       if (!b.user) return send(400, { error: 'user text required' });
-      return send(200, { text: await ask(b) });
+      const ac = new AbortController();
+      res.on('close', () => { if (!res.writableFinished) ac.abort(); }); // client gone before the answer: stop the work
+      return send(200, { text: await ask(b, ac.signal) });
     }
     if (req.method === 'POST' && req.url === '/remote/start') { startRemote(); return send(200, remoteState()); }
     if (req.method === 'GET' && req.url === '/remote/status') return send(200, remoteState());
