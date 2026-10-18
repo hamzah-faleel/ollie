@@ -143,6 +143,7 @@ async function queue({ to, subject, body, reply_to_id } = {}, ctx) {
 
   db.prepare("UPDATE email_outbox SET status = 'cancelled' WHERE owner_chat = ? AND status = 'draft'").run(ctx.chatId);
   try { db.prepare("UPDATE outbox SET status = 'cancelled' WHERE owner_chat = ? AND status = 'draft'").run(ctx.chatId); } catch {} // one pending "yes" at a time
+  require('./intake').discardInvites(ctx.chatId); // ...and a waiting intake invite (lazy: avoids a circular require)
   db.prepare('INSERT INTO email_outbox (owner_chat, to_addr, subject, body, thread_id, in_reply_to, refs, reply_subject, unverified, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
     .run(ctx.chatId, addrs.join(', '), subject, body, thread?.id || null, thread?.mid || null, thread?.refs || null, thread ? thread.subject.slice(0, 200) : null, unverified.join(', '), Date.now());
   return { ok: true, status: 'queued_awaiting_owner_confirmation', to: addrs.join(', '), note: 'NOT sent. The system shows the owner the exact email and sends only after they reply yes. Do not say it was sent.' };

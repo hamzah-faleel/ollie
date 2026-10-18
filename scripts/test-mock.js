@@ -202,7 +202,7 @@ const check = (name, ok, info = '') => { console.log(`${ok ? 'PASS' : 'FAIL'}  $
   const botEnv = { PATH: process.env.PATH, PORT: botPort, OPENWA_URL: `http://127.0.0.1:${owPort}`, OPENWA_API_KEY: 'k', WEBHOOK_SECRET: SECRET, OWNER_NUMBERS: OWNER,
     GEMINI_API_KEY: 'unused', AI_PROVIDER: 'openrouter', OPENROUTER_API_KEY: 'sk-or-test', OPENROUTER_BASE_URL: `http://127.0.0.1:${orPort}`,
     OPENROUTER_MODEL: 'main/model', OPENROUTER_FALLBACK_MODEL: 'fallback/model', AI_RETRY_BASE_MS: '20', DAILY_SPEND_LIMIT_USD: '0.0005', BRIEFING_TIME: '', WRAP_TIME: '', NEEDS_REPLY_AI: 'off', PERSONAL_SESSION_ID: 'personal-1', OPENWA_PERSONAL_KEY: 'pk-test', MEMORY_TIME: '', MEMORY_PAUSE_MS: '0',
-    OWNER_NAME: 'Test Owner', ALERT_TICK_MS: '3600000', ALERT_QUIET: '', ALERT_NUDGE_WINDOW: '00:00-23:59', MEMORY_MIN_MESSAGES: '3', MEMORY_BACKFILL_CHATS: '3', MEMORY_NIGHTLY_CHARS: '6000', DB_PATH: dbPath, VAULT_DIR: path.join(tmp, 'vault'), TZ: 'Asia/Colombo' };
+    OWNER_NAME: 'Test Owner', ALERT_TICK_MS: '3600000', ALERT_QUIET: '', ALERT_NUDGE_WINDOW: '00:00-23:59', MEMORY_MIN_MESSAGES: '3', MEMORY_BACKFILL_CHATS: '3', MEMORY_NIGHTLY_CHARS: '6000', INTAKE_INVITES_PER_DAY: '3', DB_PATH: dbPath, VAULT_DIR: path.join(tmp, 'vault'), TZ: 'Asia/Colombo' };
   let log = '';
   const startBot = async () => {
     const child = spawn('node', ['--disable-warning=ExperimentalWarning', 'index.js'], { cwd: path.join(__dirname, '..'), env: botEnv });
@@ -597,8 +597,101 @@ const check = (name, ok, info = '') => { console.log(`${ok ? 'PASS' : 'FAIL'}  $
   check('it does not ask again straight away', !sent.some((x) => /💡/.test(x)), JSON.stringify(sent));
   reset(); await say(botPort, '/deny Test Chatty');
   check('/deny says no and stops suggestions for 30 days', await until(() => /no AI chat with Test Chatty/.test(lastSent())), lastSent());
+  // ---- Owner-initiated intake invites (/intake send <name|number>, send_intake_form tool): queued, shown, sent only on a typed yes ----
+  {
+    const invRows = () => db.prepare('SELECT * FROM intake_invites ORDER BY id').all();
+    const invTool = () => orRequests.flatMap((r) => r.messages || []).filter((m) => m.role === 'tool').map((m) => m.content).join('\n');
+    const INV_TEXT = "Hi! I'm Sec, Test Owner's assistant. Test Owner asked me to say hello and ask 4 quick questions so Test Owner knows who you are. (Reply STOP any time and I won't message you again.)\n\n1/4 What's your name?";
+    const inv = stranger(20), invChat = strangerChat(20);
+    reset(); await say(botPort, '/intake off'); await until(() => /Intake is OFF/.test(lastSent()));
+    reset(); await say(botPort, `/intake send +${inv}`);
+    check('invite: refused while intake is off (asks for /intake on)', await until(() => /^Not queued: Intake is off/.test(lastSent()) && /\/intake on/.test(lastSent())) && invRows().length === 0, lastSent());
+    reset(); await say(botPort, '/intake on'); await until(() => /Intake is ON/.test(lastSent()));
+    reset(); await say(botPort, '/intake send 074 444 0020');
+    check('/intake send: preview with the full number and the exact intro + question 1', await until(() => /Intake form for \+94 74 444 0020/.test(lastSent())) && lastSent().includes(`"${INV_TEXT}"`) && /Reply \*yes\* to send/.test(lastSent()), lastSent());
+    check('/intake send: nothing sent to them, no AI call', !sentTo.includes(invChat) && orRequests.length === 0 && invRows().at(-1).status === 'draft');
+    reset(); await say(botPort, 'no');
+    check('invite: no cancels it', await until(() => /Cancelled\. Nothing was sent/.test(lastSent())) && invRows().at(-1).status === 'cancelled' && !sentTo.includes(invChat), lastSent());
+    reset(); script = [calls(['i1', 'send_intake_form', { to: `+${inv}` }]), text('Sent it to them!')];
+    await say(botPort, 'send this number the intake form');
+    check('send_intake_form tool: the owner sees the code-level preview, not the AI text', await until(() => /Intake form for \+94 74 444 0020/.test(lastSent())) && lastSent().includes(INV_TEXT) && !sent.includes('Sent it to them!'), lastSent());
+    check('send_intake_form tool: result tells the model it was NOT sent', /NOT sent/.test(invTool()) && /invite_awaiting_owner_confirmation/.test(invTool()), invTool());
+    check('send_intake_form is offered to the AI', orRequests[0]?.tools?.some((t) => t.function.name === 'send_intake_form'));
+    check('send_intake_form tool: nothing sent before the yes', !sentTo.includes(invChat));
+    reset(); await toBot(botPort, stranger(21), 'yes', { contact: { name: 'Test Yesman' } }); await sleep(500);
+    check('a "yes" from someone else does not confirm the owner\'s invite', invRows().at(-1).status === 'draft' && !sentTo.includes(invChat));
+    owSlow = 700; owCalls.length = 0; reset(); script = [text('no draft here'), text('no draft here')];
+    await Promise.all([say(botPort, 'yes'), say(botPort, 'yes')]);
+    await until(() => sent.some((x) => /Sent the intake form/.test(x))); await sleep(1000); owSlow = 0;
+    check('invite: double yes sends exactly once', sentTo.filter((c) => c === invChat).length === 1 && invRows().at(-1).status === 'sent', JSON.stringify(sentTo));
+    check('invite: they get exactly the previewed text, from the bot session (never the personal one)', sent[sentTo.indexOf(invChat)] === INV_TEXT && owCalls.includes('POST /api/sessions/sess-1/messages/send-text') && !owCalls.some((c) => !c.startsWith('GET') && c.includes('personal-1')), JSON.stringify(owCalls));
+    check('invite: the owner is told', sent.some((x) => x === "✅ Sent the intake form to +94 74 444 0020. I'll tell you when they answer."), JSON.stringify(sent));
+    const ip = db.prepare('SELECT * FROM intake_people WHERE phone = ?').get(inv);
+    check('invite: intake row created first (stage 1, form, 0 in, 1 out)', ip?.stage === 1 && ip.status === 'form' && ip.msgs_in === 0 && ip.msgs_out === 1, JSON.stringify(ip));
+    check('invite: stored as bot-auto (never counts as the owner answering)', db.prepare("SELECT COUNT(*) n FROM inbox_messages WHERE chat_id = ? AND source = 'bot-auto' AND from_me = 1").get(invChat).n === 1 && db.prepare("SELECT COUNT(*) n FROM inbox_messages WHERE chat_id = ? AND source = 'bot-owner'").get(invChat).n === 0);
+    reset(); await say(botPort, `/intake send +${inv}`);
+    check('invite: refused while their form is in progress', await until(() => /already filling in the form/.test(lastSent())), lastSent());
+    const invStep = async (t, expect) => { reset(); await toBot(botPort, inv, t, { contact: { name: 'Test Invitee' } }); return until(() => sent.some((x) => expect.test(x))); };
+    check('invited person: their reply continues the form (stage advances)', await invStep('Nimal Silva', /2\/4 Nice to meet you, Nimal!/) && db.prepare('SELECT stage FROM intake_people WHERE phone = ?').get(inv).stage === 2, JSON.stringify(sent));
+    check('invited person: the reply is relayed to the owner too', sent.some((x) => /^↩️ \*Test Invitee\*/.test(x) && /Nimal Silva/.test(x)), JSON.stringify(sent));
+    check('invited person: answer 2', await invStep('A', /3\/4/), JSON.stringify(sent));
+    check('invited person: answer 3', await invStep('skip', /4\/4/), JSON.stringify(sent));
+    check('invited person: finishing the form tells the owner', await invStep('mornings', /Thanks, Nimal!/) && await until(() => sent.some((x) => /Nimal Silva\* \(\+94744440020\) finished the form: Family/.test(x))), JSON.stringify(sent));
+    const nimal = path.join(peopleDir, 'Nimal Silva.md'), nimalText = fs.existsSync(nimal) ? fs.readFileSync(nimal, 'utf8') : '';
+    check('invited person: answers written to a new private note (origin: bot)', /phone: \+94744440020/.test(nimalText) && /relationship: family/.test(nimalText) && /^origin: bot$/m.test(nimalText), nimalText.slice(0, 300));
+    reset(); await say(botPort, `/intake send +${inv}`);
+    check('invite: refused once they finished the form', await until(() => /already finished the form\. \/people shows it/.test(lastSent())), lastSent());
+    reset(); await say(botPort, `/intake send +${stranger(3)}`);
+    check('invite: refused for someone who said STOP', await until(() => /asked me to stop messaging them/.test(lastSent())) && invRows().every((r) => r.phone !== stranger(3)), lastSent());
+    reset(); await say(botPort, `/intake send +${OWNER}`);
+    check("invite: refused for the owner's own number", await until(() => /owner's own number/.test(lastSent())), lastSent());
+    reset(); await say(botPort, '/intake send');
+    check('/intake send without a target shows the usage', await until(() => /Use \/intake send <name or phone number>/.test(lastSent())), lastSent());
+    // the AI turn throws after queueing: cancelled, a later yes sends nothing
+    reset(); script = [calls(['i2', 'send_intake_form', { to: `+${stranger(24)}` }]), fail(402, 'Insufficient credits')];
+    await say(botPort, 'send the form to that number');
+    check('turn failed after queueing an invite: the owner is told it was cancelled', await until(() => sent.some((x) => /unavailable/i.test(x) && /cancelled/i.test(x))) && invRows().at(-1).status === 'cancelled', JSON.stringify(sent));
+    reset(); script = [text('nothing is waiting')]; await say(botPort, 'yes'); await until(() => sent.length > 0); await sleep(300);
+    check('turn failed after queueing an invite: a later yes sends nothing', !sentTo.includes(strangerChat(24)), JSON.stringify(sentTo));
+    // one pending yes at a time: an invite replaces a WhatsApp draft, a draft or email replaces an invite
+    reset(); script = [calls(['i3', 'send_whatsapp', { to: '+94 77 123 4569', text: 'hello there' }]), text('Drafted')];
+    await say(botPort, 'message that number'); await until(() => /Draft to \+94 77 123 4569/.test(lastSent()));
+    reset(); await say(botPort, `/intake send +${stranger(24)}`); await until(() => /Intake form for/.test(lastSent()));
+    check('creating an invite cancels a waiting WhatsApp draft', db.prepare('SELECT status FROM outbox ORDER BY id DESC LIMIT 1').get().status === 'cancelled' && invRows().at(-1).status === 'draft');
+    reset(); script = [calls(['i4', 'send_whatsapp', { to: '+94 77 123 4569', text: 'hello again' }]), text('Drafted')];
+    await say(botPort, 'message that number again'); await until(() => /Draft to \+94 77 123 4569/.test(lastSent()));
+    check('creating a WhatsApp draft cancels a waiting invite', invRows().at(-1).status === 'cancelled' && db.prepare('SELECT status FROM outbox ORDER BY id DESC LIMIT 1').get().status === 'draft');
+    reset(); await say(botPort, 'no'); await until(() => /Nothing was sent/.test(lastSent()));
+    // prompt injection angle: untrusted text read in the turn, the model queues an invite and claims it was sent; nothing goes out
+    reset(); script = [calls(['i5', 'read_note', { title: 'Test Hint' }]), calls(['i6', 'send_intake_form', { to: `+${stranger(24)}` }]), text('Done, I sent the form!')];
+    await say(botPort, 'read the hint note');
+    check('injection: the tool alone never sends; the full number is shown for a typed yes', await until(() => /Intake form for \+94 74 444 0024/.test(lastSent())) && !sent.includes('Done, I sent the form!') && !sentTo.includes(strangerChat(24)) && invRows().at(-1).status === 'draft', lastSent());
+    // expiry
+    db.prepare("UPDATE intake_invites SET created_at = created_at - 16 * 60000 WHERE status = 'draft'").run();
+    reset(); script = [text('Nothing is waiting')]; await say(botPort, 'yes');
+    check('an invite older than 15 minutes expires: yes does not send it', await until(() => sent.includes('Nothing is waiting')) && invRows().at(-1).status === 'expired' && !sentTo.includes(strangerChat(24)), JSON.stringify(sent));
+    // an existing contact (hand-written note matched by phone) can be invited; the finished form merges into that note
+    reset(); await say(botPort, '/intake send +94722220002'); await until(() => /Intake form for \+94 72 222 0002/.test(lastSent()));
+    reset(); await say(botPort, 'yes');
+    check('invite to a known contact is sent (the owner chose it)', await until(() => /Sent the intake form/.test(lastSent())) && sentTo.includes('94722220002@c.us'), lastSent());
+    for (const a of ['Dave Fernando', 'B', 'Cricket club', 'evenings']) { await toBot(botPort, '94722220002', a, { contact: { name: 'Test Dave' } }); await sleep(250); }
+    await until(() => sent.some((x) => /Dave Fernando\* \(\+94722220002\) finished the form/.test(x)));
+    const daveNow = fs.readFileSync(daveFile, 'utf8');
+    check('known contact: the form merges into their existing note (hand-written text and relationship kept)', /Hand-written: likes cricket/.test(daveNow) && /## Self-reported \(form/.test(daveNow) && /Name: Dave Fernando/.test(daveNow) && /relationship: friend/.test(daveNow) && /phone: \+94722220002/.test(daveNow), daveNow);
+    check('known contact: no duplicate note, and the note is not re-marked as bot-only', fs.readdirSync(peopleDir).filter((f) => /dave|222 0002/i.test(f)).length === 1 && !/^origin: bot/m.test(daveNow) && !/^source: form/m.test(daveNow), daveNow);
+    // daily cap (INTAKE_INVITES_PER_DAY=3: two sent so far)
+    reset(); await say(botPort, `/intake send +${stranger(22)}`); await until(() => /Intake form for/.test(lastSent()));
+    reset(); await say(botPort, 'yes'); await until(() => /Sent the intake form/.test(lastSent()));
+    reset(); await say(botPort, `/intake send +${stranger(23)}`);
+    check('invite: daily cap counted in code', await until(() => /Daily invite limit reached \(3 per 24h\)/.test(lastSent())) && !invRows().some((r) => r.phone === stranger(23)), lastSent());
+    // the personal session never queues or sends an invite, even from the owner's own number
+    reset(); await personal(botPort, OWNER, `/intake send +${stranger(25)}`, { name: 'Owner' }); await sleep(500);
+    check('invite: the personal session never queues or sends one', !invRows().some((r) => r.phone === stranger(25)) && sent.length === 0, JSON.stringify(sent));
+  }
   reset(); await say(botPort, '/intake off');
   check('/intake off switches it all off', await until(() => /Intake is OFF/.test(lastSent())));
+  reset(); await toBot(botPort, stranger(20), 'a message after intake was switched off', { contact: { name: 'Test Invitee' } });
+  check('intake off: an invited person is still relayed (the owner chose to contact them) but gets no reply', await until(() => sent.some((x) => /^↩️ \*Test Invitee\*/.test(x) && /after intake was switched off/.test(x))) && !sentTo.includes(strangerChat(20)), JSON.stringify(sent));
   reset(); await toBot(botPort, stranger(9), 'hello after off'); await sleep(500);
   check('with intake off, strangers get no replies', !sentTo.includes(strangerChat(9)));
 

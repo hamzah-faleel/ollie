@@ -35,7 +35,7 @@ async function handle(msg, send, reply) {
   if (reply) gate = await intake.handle(rec, { chatId: msg.chatId, reply, notifyOwner: send }).catch((e) => { console.warn('[intake]', e.message); return null; });
 
   if (m === 'off') return true;
-  if (!gate?.forward && m === 'replies' && !outbox.hasSentTo(rec.phone)) return true;
+  if (!gate?.forward && m === 'replies' && !outbox.hasSentTo(rec.phone) && !intake.invited(rec.phone)) return true; // invited = the owner chose to contact them
 
   const key = rec.phone || String(msg.chatId);
   const mine = recent(sentAt.get(key) || sentAt.set(key, []).get(key));

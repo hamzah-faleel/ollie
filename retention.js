@@ -11,6 +11,7 @@ const RULES = [
   ['ai_usage', 'ts', ''],
   ['outbox', 'created_at', FINISHED],
   ['email_outbox', 'created_at', FINISHED],
+  ['intake_invites', 'created_at', FINISHED],
 ];
 
 function purge(now = Date.now()) {

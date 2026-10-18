@@ -26,6 +26,10 @@ const AI_TOTAL_DAY = Number(process.env.AI_CHAT_TOTAL_DAY || 60);
 const SUGGEST_MSGS = Number(process.env.INTAKE_SUGGEST_MSGS || 5);
 const SUGGEST_REPEAT_DAYS = Number(process.env.INTAKE_SUGGEST_REPEAT_DAYS || 7);
 const SUGGEST_PER_DAY = Number(process.env.INTAKE_SUGGEST_PER_DAY || 2);
+const INVITES_PER_DAY = Number(process.env.INTAKE_INVITES_PER_DAY ?? 10);
+const INVITE_TTL_MS = 15 * 60_000;
+const OWNERS = (process.env.OWNER_NUMBERS || '').split(',').map((s) => s.replace(/\D/g, '')).filter(Boolean);
+const PERSONAL = (process.env.PERSONAL_SESSION_ID || '').trim();
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS intake_people (
@@ -43,7 +47,21 @@ db.exec(`
     out_day TEXT, out_count INTEGER NOT NULL DEFAULT 0,
     ai_day TEXT, ai_count INTEGER NOT NULL DEFAULT 0
   );
+  CREATE TABLE IF NOT EXISTS intake_invites (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    owner_chat TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    to_name TEXT NOT NULL,
+    to_chat TEXT NOT NULL,
+    phone TEXT NOT NULL,
+    text TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'draft',  -- draft | sending | sent | cancelled | expired | failed
+    created_at INTEGER NOT NULL,
+    sent_at INTEGER
+  );
 `);
+// Nothing is in flight at startup: an invite left 'sending' by a crash mid-send is marked failed (never resent, it may have gone out).
+db.prepare("UPDATE intake_invites SET status = 'failed' WHERE status = 'sending'").run();
 
 const digits = (s) => String(s || '').replace(/\D/g, '');
 const today = () => new Date().toLocaleDateString('en-CA', { timeZone: TZ });
@@ -61,6 +79,8 @@ const QUESTIONS = {
   4: () => `4/4 Last one: what's the best way and time to reach you? (or say "skip")`,
 };
 const INTRO = `Hi! I'm ${BOT}, ${OWNER}'s assistant. I'll pass your message on. To help ${OWNER} know who you are, may I ask 4 quick questions? (Reply STOP any time and I won't message you again.)\n\n`;
+// The owner asked the bot to introduce itself (/intake send, or the send_intake_form tool). No pronouns: the owner's name only.
+const INVITE_INTRO = `Hi! I'm ${BOT}, ${OWNER}'s assistant. ${OWNER} asked me to say hello and ask 4 quick questions so ${OWNER} knows who you are. (Reply STOP any time and I won't message you again.)\n\n`;
 const firstName = (p) => (JSON.parse(p.answers || '{}').name || '').split(/\s+/)[0] || '';
 const isStop = (t) => /^\s*(stop|unsubscribe|cancel|opt out)\s*[.!]*$/i.test(t);
 const isSkip = (t) => /^\s*(skip|-|no|none|n\/a|pass)\s*[.!]*$/i.test(t);
@@ -121,8 +141,10 @@ async function writeProfile(p) {
   body = body.replace(/\n## Self-reported \(form[\s\S]*?(?=\n## |\s*$)/, '').replace(/\n*$/, '\n') + '\n' + section;
   fm = memory.setFm(fm || 'private: true', {
     private: 'true', phone: `+${p.phone}`, ...(/^relationship:/m.test(fm) ? {} : { relationship: rel }),
-    ...(a.org ? { org: clean(a.org, 60).replace(/:/g, ' -') } : {}), last_contact: today(), source: `form ${today()}`,
-    ...(note ? {} : { origin: 'bot' }), // self-reported name: outbox.js never resolves "message <name>" from a note this form created
+    ...(a.org ? { org: clean(a.org, 60).replace(/:/g, ' -') } : {}), last_contact: today(),
+    // self-reported name: outbox.js never resolves "message <name>" from a note this form created. An existing note (e.g. someone the
+    // owner invited with /intake send) keeps its own source/origin, so the owner's contact stays resolvable by name.
+    ...(note ? {} : { origin: 'bot', source: `form ${today()}` }),
   });
   await fs.mkdir(path.dirname(file), { recursive: true });
   await fs.writeFile(file, `---\n${fm}\n---\n${body.trim()}\n`);
@@ -255,6 +277,97 @@ function suggestions() {
   return out;
 }
 
+// ---------- owner-initiated invites: "send Sam the intake form" ----------
+// The AI tool (send_intake_form) and /intake send only QUEUE an invite. index.js sends it when the owner types yes (code-level check,
+// typed text only), like outbox.js drafts. Only one pending yes at a time across WhatsApp drafts, emails and invites.
+const inviteText = () => INVITE_INTRO + QUESTIONS[1]();
+const invitesToday = () => db.prepare("SELECT COUNT(*) n FROM intake_invites WHERE (status = 'sent' AND sent_at > ?) OR (status = 'sending' AND created_at > ?)").get(Date.now() - 86_400_000, Date.now() - 86_400_000).n;
+function blockedReason(p, who) {
+  if (!p) return null;
+  if (p.status === 'stopped') return `${who} asked me to stop messaging them, so I won't message them again.`;
+  if (p.status === 'form') return `${who} is already filling in the form (${p.stage - 1}/4 answered). /people shows it.`;
+  return `${who} already finished the form. /people shows it.`;
+}
+
+async function createInvite({ to } = {}, ctx) {
+  if (!ctx?.chatId || !ctx?.sessionId) return { error: 'No chat context.' };
+  if (PERSONAL && ctx.sessionId === PERSONAL) return { error: 'Never from the personal session.' };
+  if (!(INVITES_PER_DAY > 0)) return { error: 'Intake invites are switched off (INTAKE_INVITES_PER_DAY=0).' };
+  if (mode() !== 'on') return { error: 'Intake is off, so I could not handle their answers. Tell the owner to send /intake on first.' };
+  if (!String(to || '').trim()) return { error: 'Who should get the form? Need a contact name or a phone number.' };
+  const r = await outbox.resolve(to);
+  if (r.error) return r;
+  if (OWNERS.includes(r.digits)) return { error: "That's the owner's own number." };
+  if (inbox.isBotChat(r.chatId)) return { error: "That's my own number." };
+  const who = /^\+\d+$/.test(r.name) ? outbox.formatPhone(r.digits) : r.name;
+  const blocked = blockedReason(getP(r.digits), who);
+  if (blocked) return { error: blocked };
+  if (invitesToday() >= INVITES_PER_DAY) return { error: `Daily invite limit reached (${INVITES_PER_DAY} per 24h). Try again tomorrow.` };
+  db.prepare("UPDATE intake_invites SET status = 'cancelled' WHERE owner_chat = ? AND status = 'draft'").run(ctx.chatId);
+  outbox.cancel(ctx.chatId);                // one pending "yes" at a time: an invite replaces a waiting WhatsApp draft...
+  require('./mailout').discard(ctx.chatId); // ...and a waiting email
+  db.prepare('INSERT INTO intake_invites (owner_chat, session_id, to_name, to_chat, phone, text, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(ctx.chatId, ctx.sessionId, r.name, r.chatId, r.digits, inviteText(), Date.now());
+  return { ok: true, status: 'invite_awaiting_owner_confirmation', to: String(to).trim(), note: 'NOT sent. The system shows the owner the exact number and intro text and sends only after they reply yes. Do not say it was sent.' };
+}
+
+function pendingInvite(ownerChat) {
+  const v = db.prepare("SELECT * FROM intake_invites WHERE owner_chat = ? AND status = 'draft' ORDER BY id DESC LIMIT 1").get(ownerChat);
+  if (!v) return null;
+  if (Date.now() - v.created_at > INVITE_TTL_MS) { db.prepare("UPDATE intake_invites SET status = 'expired' WHERE id = ?").run(v.id); return null; }
+  return v;
+}
+
+// Always the full number and the exact first message.
+function invitePreview(v) {
+  const number = outbox.formatPhone(v.phone);
+  const who = /^\+\d+$/.test(v.to_name) ? number : `${v.to_name} (${number})`;
+  return `📝 *Intake form for ${who}:*\n"${v.text}"\n\nWhen they reply I'll ask the other 3 questions (no AI) and save the answers to their private note.\nReply *yes* to send, *no* to cancel. Expires in 15 min.`;
+}
+
+// send(sessionId, chatId, text) is index.js's sendText. Returns the reply for the owner, or null if nothing is waiting.
+async function confirmInvite(ownerChat, send) {
+  const v = pendingInvite(ownerChat);
+  if (!v) return inviteSending(ownerChat) ? 'That invite is already being sent.' : null;
+  const who = /^\+\d+$/.test(v.to_name) ? outbox.formatPhone(v.phone) : `${v.to_name} (${outbox.formatPhone(v.phone)})`;
+  const drop = (msg) => { db.prepare("UPDATE intake_invites SET status = 'cancelled' WHERE id = ?").run(v.id); return msg; };
+  if (PERSONAL && v.session_id === PERSONAL) return drop('Not sent: never from the personal session.');
+  // Everything below up to the send runs synchronously, so a second "yes" or a message from them can't slip in between.
+  if (mode() !== 'on') return drop('Not sent: intake is off now. Send /intake on first, then ask again.');
+  const blocked = blockedReason(getP(v.phone), v.to_name);
+  if (blocked) return drop(`Not sent. ${blocked}`);
+  if (db.prepare("UPDATE intake_invites SET status = 'sending' WHERE id = ? AND status = 'draft'").run(v.id).changes !== 1) return 'That invite is already being sent.';
+  if (invitesToday() - 1 >= INVITES_PER_DAY) return drop(`Daily invite limit reached (${INVITES_PER_DAY} per 24h). Invite discarded.`);
+  // The row first, so their reply continues the form (handleInner continues an existing row and skips the "known person" check).
+  db.prepare("INSERT INTO intake_people (phone, chat_id, name, stage, status, started_at, msgs_in) VALUES (?, ?, ?, 1, 'form', ?, 0)").run(v.phone, v.to_chat, v.to_name, Date.now());
+  const p = getP(v.phone);
+  let ok = false;
+  try { ok = await sendCounted(p, { chatId: v.to_chat, reply: (t) => send(v.session_id, v.to_chat, t) }, v.text); }
+  catch (e) { console.error('[intake] invite send failed:', e.message); }
+  if (!ok) {
+    db.prepare("UPDATE intake_invites SET status = 'failed' WHERE id = ?").run(v.id);
+    db.prepare("DELETE FROM intake_people WHERE phone = ? AND msgs_in = 0 AND msgs_out = 0").run(v.phone); // they never got it: no half-started form
+    return `Couldn't send the intake form to ${who}. Nothing is waiting now; ask again later.`;
+  }
+  db.prepare("UPDATE intake_invites SET status = 'sent', sent_at = ? WHERE id = ?").run(Date.now(), v.id);
+  console.log(`[intake] invite #${v.id} sent`);
+  return `✅ Sent the intake form to ${who}. I'll tell you when they answer.`;
+}
+
+function cancelInvite(ownerChat) {
+  const v = pendingInvite(ownerChat);
+  if (!v) return null;
+  db.prepare("UPDATE intake_invites SET status = 'cancelled' WHERE id = ?").run(v.id);
+  return `Cancelled. Nothing was sent to ${v.to_name}.`;
+}
+// Used by outbox.createDraft and mailout.queue: a new WhatsApp draft or email replaces a waiting invite (one pending yes at a time).
+const discardInvites = (ownerChat) => Number(db.prepare("UPDATE intake_invites SET status = 'cancelled' WHERE owner_chat = ? AND status = 'draft'").run(ownerChat).changes);
+// The AI turn failed after queueing: the owner never saw the preview, so the invite must not wait for a yes.
+const discardInvitesSince = (ownerChat, since) => Number(db.prepare("UPDATE intake_invites SET status = 'cancelled' WHERE owner_chat = ? AND status = 'draft' AND created_at >= ?").run(ownerChat, since).changes);
+const inviteSending = (ownerChat) => Boolean(db.prepare("SELECT 1 FROM intake_invites WHERE owner_chat = ? AND status = 'sending' LIMIT 1").get(ownerChat));
+// The owner chose to contact this number (a sent invite): their replies are relayed like replies to an outbox message.
+const invited = (phoneDigits) => Boolean(phoneDigits) && Boolean(db.prepare("SELECT 1 FROM intake_invites WHERE status = 'sent' AND phone = ? LIMIT 1").get(digits(phoneDigits)));
+
 // ---------- owner commands ----------
 function find(q) {
   const d = digits(q);
@@ -268,7 +381,7 @@ const describeState = (p) => p.status === 'stopped' ? 'asked me to stop' : p.sta
 function intakeCommand(arg) {
   const a = arg.trim().toLowerCase();
   if (a === 'on' || a === 'off') { db.setKv('intake_mode', a); return a === 'on' ? `✅ Intake is ON. New numbers that write to my number get a 4-question form (templates only, no AI). Limits: ${NEW_PER_DAY} new people a day, ${OUT_PER_DAY} messages per person a day. I only talk to people with AI after you /allow them. /intake off to stop everything.` : '⏹ Intake is OFF. I will not message strangers, and AI chats are paused. Messages to my number are still stored and forwarded per /forward.'; }
-  return `*Intake* is ${mode().toUpperCase()}.\nForm for new numbers: name, how they know ${OWNER}, club/company, best time to reach (no AI). AI chat only for people you /allow.\n/intake on | /intake off | /people | /allow <name> | /deny <name>`;
+  return `*Intake* is ${mode().toUpperCase()}.\nForm for new numbers: name, how they know ${OWNER}, club/company, best time to reach (no AI). AI chat only for people you /allow.\n/intake send <name or number> sends someone the form (you confirm with yes; ${INVITES_PER_DAY} a day).\n/intake on | /intake off | /intake send <name> | /people | /allow <name> | /deny <name>`;
 }
 function people() {
   const rows = db.prepare('SELECT * FROM intake_people ORDER BY started_at DESC LIMIT 20').all();
@@ -297,4 +410,5 @@ function deny(arg) {
   return `Okay, no AI chat with ${hits[0].name || '+' + hits[0].phone}. I'll stop suggesting it for 30 days.`;
 }
 
-module.exports = { handle, suggestions, intakeCommand, people, allow, deny, mode };
+module.exports = { handle, suggestions, intakeCommand, people, allow, deny, mode,
+  createInvite, pendingInvite, invitePreview, confirmInvite, cancelInvite, discardInvites, discardInvitesSince, inviteSending, invited, inviteText };

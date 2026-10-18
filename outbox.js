@@ -46,6 +46,9 @@ function botOnlyPhone(phone) {
   const last9 = String(phone || '').replace(/\D/g, '').slice(-9);
   if (last9.length < 7) return false;
   try {
+    // A number the owner chose to send the intake form to (/intake send) is the owner's own contact, not a bot-only stranger.
+    if (db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'intake_invites'").get()
+      && db.prepare("SELECT 1 FROM intake_invites WHERE status = 'sent' AND substr(phone, -9) = ? LIMIT 1").get(last9)) return false;
     const rows = db.prepare("SELECT DISTINCT source FROM inbox_messages WHERE substr(phone, -9) = ? OR chat_id LIKE ?").all(last9, `%${last9}@c.us`);
     return rows.length > 0 && rows.every((r) => r.source === 'bot' || r.source === 'bot-auto');
   } catch { return false; }
@@ -107,6 +110,7 @@ async function createDraft({ to, text }, ctx) {
   if (OWNERS.includes(r.digits)) return { error: "That's the owner's own number. Just tell them directly." };
   db.prepare("UPDATE outbox SET status = 'cancelled' WHERE owner_chat = ? AND status = 'draft'").run(ctx.chatId);
   require('./mailout').discard(ctx.chatId); // only one pending "yes" at a time: a new WhatsApp draft replaces a waiting email
+  require('./intake').discardInvites(ctx.chatId); // ...and a waiting intake invite (lazy: intake.js requires this file)
   db.prepare('INSERT INTO outbox (owner_chat, session_id, to_name, to_chat, text, created_at) VALUES (?, ?, ?, ?, ?, ?)')
     .run(ctx.chatId, ctx.sessionId, r.name, r.chatId, text, Date.now());
   return { ok: true, status: 'draft_awaiting_owner_confirmation', to: String(to).trim(), note: 'NOT sent. The system shows the owner the draft and sends only after they reply yes. Do not say it was sent.' };
@@ -172,4 +176,4 @@ const discardSince = (ownerChat, since) => Number(db.prepare("UPDATE outbox SET 
 // A draft of this chat is being handed to OpenWA right now (claimed by a yes).
 const sending = (ownerChat) => Boolean(db.prepare("SELECT 1 FROM outbox WHERE owner_chat = ? AND status = 'sending' LIMIT 1").get(ownerChat));
 
-module.exports = { createDraft, hasSentTo, pendingDraft, draftPreview, confirm, cancel, discardSince, sending, formatPhone };
+module.exports = { createDraft, hasSentTo, pendingDraft, draftPreview, confirm, cancel, discardSince, sending, formatPhone, resolve };
