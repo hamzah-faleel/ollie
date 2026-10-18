@@ -89,6 +89,21 @@ function schedulePush(message) {
   }), 5_000);
 }
 
+// Other modules write notes straight to disk (nightly memory run, intake form, /rel, tasks, contacts, profile) without calling
+// schedulePush, so a periodic sweep commits and pushes whatever changed. No change = no commit.
+function sweep() {
+  if (!gitEnabled()) return Promise.resolve();
+  return queueGit(async () => {
+    await git(['add', '-A']);
+    if (!(await git(['status', '--porcelain'])).trim()) return;
+    await git(['commit', '-m', 'Notes update']);
+    await git(['pull', '--rebase', '--autostash', 'origin', BRANCH]).catch(() => {});
+    await git(['push', '-u', 'origin', BRANCH]);
+    console.log('[vault] pushed: Notes update');
+  }).catch(() => {});                                                          // queueGit already logged the failure
+}
+if (gitEnabled()) setInterval(sweep, Number(process.env.VAULT_SWEEP_MIN || 15) * 60_000).unref();
+
 // ---------- helpers ----------
 const today = () => new Date().toLocaleDateString('en-CA', { timeZone: TZ }); // YYYY-MM-DD
 const nowTime = () => new Date().toLocaleTimeString('en-GB', { timeZone: TZ, hour: '2-digit', minute: '2-digit' });
@@ -210,4 +225,4 @@ async function listRecentNotes({ limit = 10 }) {
 const walkAll = () => walk(VAULT, [], true);
 const files = { VAULT, walk, walkAll, rel, titleOf, slug, safePath, today, pull, schedulePush };
 
-module.exports = { files, init, syncEmbeddings, saveNote, appendToNote, addToDailyLog, readNote, searchNotes, listRecentNotes, gitEnabled };
+module.exports = { sweep, files, init, syncEmbeddings, saveNote, appendToNote, addToDailyLog, readNote, searchNotes, listRecentNotes, gitEnabled };
