@@ -139,9 +139,14 @@ async function setTyping(sessionId, chatId, state) {
 
 async function getMedia(sessionId, msg) {
   if (msg.media?.data) return { buf: Buffer.from(msg.media.data, 'base64'), mimetype: msg.media.mimetype };
-  const res = await openwa(
-    `/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(msg.chatId)}/${encodeURIComponent(msg.id)}/media`,
-  );
+  let res;
+  try {
+    res = await openwa(`/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(msg.chatId)}/${encodeURIComponent(msg.id)}/media`);
+  } catch (e) {
+    // OpenWA could not download the media from WhatsApp (its browser timed out), so nothing is stored for this message.
+    if (/-> 404\b/.test(e.message)) throw Object.assign(new Error('OpenWA has no media for this message (download failed on the gateway)'), { mediaUnavailable: true });
+    throw e;
+  }
   return { buf: Buffer.from(await res.arrayBuffer()), mimetype: msg.media?.mimetype || 'application/octet-stream' };
 }
 
@@ -672,8 +677,13 @@ const server = http.createServer((req, res) => {
     if (alreadySeen(req.headers['x-openwa-idempotency-key'] || event.idempotencyKey)) return;
 
     handle(event).catch(async (err) => {
-      console.error('Handler error:', err.message);
       const d = event.data || {};
+      if (err.mediaUnavailable) {
+        console.warn(`Media unavailable for a ${d.type || 'media'} message: ${err.message}`);
+        if (isOwner(d)) await sendText(event.sessionId, d.chatId, "I couldn't get that voice note or file. WhatsApp's download failed on the gateway side, so I never received it. Could you send it again?").catch(() => {});
+        return;
+      }
+      console.error('Handler error:', err.message);
       if (isOwner(d)) await sendText(event.sessionId, d.chatId, 'Something went wrong on my side. Check the bot logs.').catch(() => {});
     });
   });

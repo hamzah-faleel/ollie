@@ -75,6 +75,10 @@ const owSrv = http.createServer(async (req, res) => {
     res.writeHead(400, { 'Content-Type': 'application/json' });
     return res.end(JSON.stringify({ message: 'Session is not started', error: 'Bad Request', statusCode: 400 }));
   }
+  if (req.method === 'GET' && /\/messages\/.+\/nomedia[^/]*\/media/.test(req.url)) { // what OpenWA says when its own media download timed out
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({ message: 'No media stored for this message', error: 'Not Found', statusCode: 404 }));
+  }
   res.writeHead(200, { 'Content-Type': 'application/json' });
   let out = {};
   if (req.method === 'GET' && /\/sessions\/personal-1\/chats/.test(req.url)) out = unreadOn ? [...CHATS, ...UNREAD_CHATS] : CHATS;
@@ -506,6 +510,13 @@ const check = (name, ok, info = '') => { console.log(`${ok ? 'PASS' : 'FAIL'}  $
   unreadOn = false;
   reset(); await say(botPort, '/help');
   check('/help lists /unread', await until(() => /\/unread/.test(lastSent())), lastSent());
+
+  // ---- media that OpenWA could not download from WhatsApp ----
+  reset();
+  { const raw = JSON.stringify({ event: 'message.received', sessionId: SESSION, data: { id: 'nomedia1', chatId: `${OWNER}@c.us`, from: `${OWNER}@c.us`, body: '', type: 'image', kind: 'individual', isGroup: false, fromMe: false } });
+    const sig = 'sha256=' + crypto.createHmac('sha256', SECRET).update(raw).digest('hex');
+    await fetch(`http://127.0.0.1:${botPort}/webhook`, { method: 'POST', headers: { 'X-OpenWA-Signature': sig, 'X-OpenWA-Idempotency-Key': 'k-nomedia1' }, body: raw }); }
+  check('a file OpenWA failed to download gets a clear "send it again" reply, not "something went wrong"', await until(() => /send it again/.test(lastSent()) && !/Something went wrong/.test(lastSent())), lastSent());
 
   // ---- Intake form for new numbers (fixed text, no AI) ----
   const stranger = (n) => `9474444${String(n).padStart(4, '0')}`;
